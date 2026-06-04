@@ -41,8 +41,7 @@ component MenuItem inherits Rectangle {
         spacing: 8px;
         Text {
             text: root.icon;
-            font-family: "Segoe MDL2 Assets";
-            color: Theme.text-secondary;
+                       color: Theme.text-secondary;
             font-size: Theme.fs-sm;
             vertical-alignment: center;
         }
@@ -66,6 +65,10 @@ export component TerminalView inherits Rectangle {
     in property <int> cursor-col;
     in property <int> rows-used;        // content rows, for viewport sizing
     in property <bool>   is-alt-screen;
+
+    // Platform-specific monospace font: set from Rust via cfg!(); cell-probe
+    // and span rendering share this property so measurement always matches.
+    in property <string> term-font: "monospace";
     in property <[TermMatch]> find-matches; // search-highlight rectangles
     in property <[TermMatch]> selection;    // drag-selection highlight rectangles
 
@@ -121,7 +124,7 @@ export component TerminalView inherits Rectangle {
     // average advance over a long run (side bearings amortised) is accurate.
     cell-probe := Text {
         text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM"; // 50×M
-        font-family: "Consolas";
+        font-family: root.term-font;
         font-size: Theme.fs-md;
         visible: false;
     }
@@ -309,7 +312,7 @@ export component TerminalView inherits Rectangle {
                             y: span.row * root.cell-h;
                             text: span.text;
                             color: span.fg;
-                            font-family: "Consolas";
+                            font-family: root.term-font;
                             font-size: Theme.fs-md;
                             font-weight: span.bold ? 700 : 400;
                         }
@@ -341,19 +344,19 @@ export component TerminalView inherits Rectangle {
                                     padding: 4px;
                                     spacing: 1px;
                                     MenuItem {
-                                        icon: "\u{E8C8}"; label: "复制";
+                                        icon: "\u{2398}"; label: "复制";
                                         clicked => { root.copy-terminal-text(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E77F}"; label: "粘贴";
+                                        icon: "\u{2399}"; label: "粘贴";
                                         clicked => { root.paste-from-clipboard(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E74D}"; label: "清空缓存";
+                                        icon: "\u{2718}"; label: "清空缓存";
                                         clicked => { root.clear-terminal(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E721}"; label: "查找";
+                                        icon: "\u{2315}"; label: "查找";
                                         clicked => { root.find-active = true; }
                                     }
                                 }
@@ -406,18 +409,22 @@ export component TerminalView inherits Rectangle {
                 }
 
                 key-pressed(event) => {
-                    // ── Ctrl+Shift+C: copy terminal buffer ───────────────────
-                    if (event.modifiers.control && event.modifiers.shift
+                    // ── Copy: Ctrl+Shift+C (Win/Linux) or Cmd+Shift+C (macOS)
+                    // On Windows event.text contains "\u{0003}"; on Linux/winit
+                    // text is empty for modifier combos; on macOS Cmd sends
+                    // the literal letter.
+                    if ((event.modifiers.control || event.modifiers.meta)
+                            && event.modifiers.shift
                             && (event.text == "c" || event.text == "C"
-                                || event.text == "\u{0003}")) {
+                                || event.text == "\u{0003}"
+                                || event.text == "")) {
                         root.copy-terminal-text();
                         accept
-                    // ── Ctrl+V or Ctrl+Shift+V: paste from clipboard ─────────
-                    // We accept Ctrl+V (with or without Shift) so the familiar
-                    // Windows paste shortcut works in addition to Ctrl+Shift+V.
-                    } else if (event.modifiers.control
+                    // ── Paste: Ctrl+V (Win/Linux) or Cmd+V (macOS)
+                    } else if ((event.modifiers.control || event.modifiers.meta)
                             && (event.text == "v" || event.text == "V"
-                                || event.text == "\u{0016}")) {
+                                || event.text == "\u{0016}"
+                                || event.text == "")) {
                         root.paste-from-clipboard();
                         // Clipboard access on Windows can deliver WM_KILLFOCUS.
                         // Restore focus explicitly so the cursor keeps blinking.
@@ -460,9 +467,8 @@ export component TerminalView inherits Rectangle {
                     padding: 6px;
                     spacing: 6px;
                     Text {
-                        text: "\u{E721}";
-                        font-family: "Segoe MDL2 Assets";
-                        color: Theme.text-secondary;
+                        text: "\u{2315}";
+                                               color: Theme.text-secondary;
                         font-size: Theme.fs-sm;
                         vertical-alignment: center;
                     }
@@ -506,9 +512,8 @@ export component TerminalView inherits Rectangle {
                             }
                         }
                         Text {
-                            text: "\u{E711}";
-                            font-family: "Segoe MDL2 Assets";
-                            color: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            text: "\u{2715}";
+                                                       color: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
                             font-size: Theme.fs-sm;
                             horizontal-alignment: center;
                             vertical-alignment: center;

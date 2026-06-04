@@ -1,13 +1,13 @@
 [package]
 name = "meatshell"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["meatshell contributors"]
 description = "A lightweight FinalShell-style SSH/terminal client written in Rust + Slint"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/your/meatshell"
 readme = "README.md"
-rust-version = "1.75"
+rust-version = "1.88"
 
 [dependencies]
 slint = { version = "1.8", features = ["compat-1-2"] }

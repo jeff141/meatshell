@@ -84,6 +84,60 @@ slint::include_modules!();
 /// Number of samples kept for the sparkline.
 const NET_HISTORY_LEN: usize = 60;
 
+// ---------------------------------------------------------------------------
+// Linux clipboard helpers (Wayland: wl-copy/wl-paste, X11: xclip)
+// arboard's Wayland backend drops clipboard data when the Clipboard object is
+// dropped, making read-after-write impossible.  System clipboard utilities
+// handle the Wayland selection protocol correctly.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "windows"))]
+fn linux_clipboard_write(text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("pbcopy", &[])
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        ("wl-copy", &[])
+    } else {
+        ("xclip", &["-selection", "clipboard"])
+    };
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn {cmd}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes()).with_context(|| format!("{cmd} stdin"))?;
+    }
+    child.wait().with_context(|| format!("{cmd} wait"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn linux_clipboard_read() -> Result<String> {
+    use std::process::{Command, Stdio};
+    let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("pbread", &[])
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        ("wl-paste", &[])
+    } else {
+        ("xclip", &["-selection", "clipboard", "-o"])
+    };
+    let output = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to run {cmd}"))?;
+    if !output.status.success() {
+        anyhow::bail!("clipboard command exited with {}", output.status);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+}
+
 pub fn run() -> Result<()> {
     // --- Runtime + store -------------------------------------------------
     let runtime = Arc::new(
@@ -115,6 +169,17 @@ pub fn run() -> Result<()> {
 
     // --- Build window + models ------------------------------------------
     let window = AppWindow::new().context("failed to build Slint window")?;
+
+    // Set the terminal monospace font per platform so cell-probe and span
+    // rendering always measure/display with the same system font.
+    let term_font = if cfg!(target_os = "windows") {
+        "Consolas"
+    } else if cfg!(target_os = "macos") {
+        "Menlo"
+    } else {
+        "Cascadia Code"
+    };
+    window.set_term_font(term_font.into());
 
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
@@ -378,6 +443,7 @@ fn center_window(win: &AppWindow) {
 fn center_window(_win: &AppWindow) {}
 
 /// The active terminal tab's current SFTP directory ("" if unknown).
+#[cfg(windows)]
 fn active_sftp_path(win: &AppWindow, tab_id: &str) -> String {
     let model = win.get_terminals();
     if let Some(m) = model.as_any().downcast_ref::<VecModel<TerminalState>>() {
@@ -1326,7 +1392,6 @@ fn apply_session_event_to_window(
             transferred,
             total,
             state,
-            msg: _,
         } => {
             let detail = match state {
                 2 => "失败".to_string(),
@@ -1921,16 +1986,22 @@ fn wire_key_input(
                     None => String::new(),
                 }
             };
-            // Run the clipboard write on a dedicated OS thread.  arboard's
-            // Windows backend opens the clipboard and pumps Win32 messages;
-            // doing that on the Slint/winit event-loop thread re-enters the
-            // message loop and dead-locks the whole UI.
-            std::thread::spawn(move || {
-                match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
-                    Ok(()) => tracing::debug!("copy_terminal: clipboard updated"),
-                    Err(e) => tracing::warn!("copy_terminal: clipboard error: {}", e),
+            if cfg!(target_os = "windows") {
+                // Windows: arboard on a background thread to avoid re-entering
+                // the winit message loop (deadlock).
+                std::thread::spawn(move || {
+                    match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
+                        Ok(()) => tracing::debug!("copy: clipboard updated"),
+                        Err(e) => tracing::warn!("copy: clipboard error: {}", e),
+                    }
+                });
+            } else {
+                // Linux/macOS: use system clipboard commands to avoid arboard
+                // Wayland issues (clipboard data lost after Clipboard drop).
+                if let Err(e) = linux_clipboard_write(&text) {
+                    tracing::warn!("copy: clipboard error: {}", e);
                 }
-            });
+            }
         });
     }
 
@@ -1938,23 +2009,28 @@ fn wire_key_input(
     {
         let handles = handles.clone();
         window.on_paste_from_clipboard(move |tab_id: SharedString| {
-            // Clone the (Send) command sender for this tab so the clipboard read
-            // can run off the UI thread.  Reading arboard on the event-loop
-            // thread is what froze the app on middle-click / paste — see the
-            // copy handler above for the deadlock explanation.
             let sender = handles
                 .borrow()
                 .get(tab_id.as_str())
                 .map(|h| h.commands.clone());
             let Some(sender) = sender else { return };
-            std::thread::spawn(move || {
-                match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+            if cfg!(target_os = "windows") {
+                std::thread::spawn(move || {
+                    match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+                        Ok(text) => {
+                            let _ = sender.send(SessionCommand::RawInput(text.into_bytes()));
+                        }
+                        Err(e) => tracing::warn!("paste: clipboard error: {}", e),
+                    }
+                });
+            } else {
+                match linux_clipboard_read() {
                     Ok(text) => {
                         let _ = sender.send(SessionCommand::RawInput(text.into_bytes()));
                     }
-                    Err(e) => tracing::warn!("paste_from_clipboard: clipboard error: {}", e),
+                    Err(e) => tracing::warn!("paste: clipboard error: {}", e),
                 }
-            });
+            }
         });
     }
 

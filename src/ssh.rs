@@ -201,7 +201,6 @@ pub enum SessionEvent {
         transferred: u64,
         total: u64,
         state: u8, // 0 = active, 1 = done, 2 = error
-        msg: String,
     },
 }
 

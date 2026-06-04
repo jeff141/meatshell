@@ -319,7 +319,7 @@ async fn run_sftp(
                         )));
                     }
                     Err(e) => {
-                        emit_transfer(&events, &id, &filename, false, 0, 0, 2, &e.to_string());
+                        emit_transfer(&events, &id, &filename, false, 0, 0, 2);
                         let _ = events
                             .send(SessionEvent::SftpStatus(format!("下载失败: {e}")));
                     }
@@ -348,7 +348,7 @@ async fn run_sftp(
                         )));
                     }
                     Err(e) => {
-                        emit_transfer(&events, &id, &filename, true, 0, 0, 2, &e.to_string());
+                        emit_transfer(&events, &id, &filename, true, 0, 0, 2);
                         let _ = events
                             .send(SessionEvent::SftpStatus(format!("上传失败: {e}")));
                     }
@@ -557,7 +557,6 @@ fn emit_transfer(
     transferred: u64,
     total: u64,
     state: u8,
-    msg: &str,
 ) {
     let _ = events.send(SessionEvent::SftpTransfer {
         id: id.to_string(),
@@ -566,7 +565,6 @@ fn emit_transfer(
         transferred,
         total,
         state,
-        msg: msg.to_string(),
     });
 }
 
@@ -595,7 +593,7 @@ async fn download_impl(
         .await
         .with_context(|| format!("create local {local}"))?;
 
-    emit_transfer(events, id, name, false, 0, total, 0, "");
+    emit_transfer(events, id, name, false, 0, total, 0);
     let mut buf = vec![0u8; XFER_CHUNK];
     let mut done: u64 = 0;
     let mut last = Instant::now();
@@ -611,11 +609,11 @@ async fn download_impl(
         done += n as u64;
         if last.elapsed() >= Duration::from_millis(150) {
             last = Instant::now();
-            emit_transfer(events, id, name, false, done, total, 0, "");
+            emit_transfer(events, id, name, false, done, total, 0);
         }
     }
     local_file.flush().await.context("flush local file")?;
-    emit_transfer(events, id, name, false, done, total.max(done), 1, "");
+    emit_transfer(events, id, name, false, done, total.max(done), 1);
     Ok(())
 }
 
@@ -640,7 +638,7 @@ async fn upload_impl(
         .await
         .with_context(|| format!("create remote {remote}"))?;
 
-    emit_transfer(events, id, name, true, 0, total, 0, "");
+    emit_transfer(events, id, name, true, 0, total, 0);
     let mut buf = vec![0u8; XFER_CHUNK];
     let mut done: u64 = 0;
     let mut last = Instant::now();
@@ -656,11 +654,11 @@ async fn upload_impl(
         done += n as u64;
         if last.elapsed() >= Duration::from_millis(150) {
             last = Instant::now();
-            emit_transfer(events, id, name, true, done, total, 0, "");
+            emit_transfer(events, id, name, true, done, total, 0);
         }
     }
     remote_file.flush().await.context("flush remote file")?;
-    emit_transfer(events, id, name, true, done, total.max(done), 1, "");
+    emit_transfer(events, id, name, true, done, total.max(done), 1);
     Ok(())
 }
 
