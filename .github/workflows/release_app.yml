@@ -5,11 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to upload to, for example v0.1.0"
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -24,26 +19,8 @@ jobs:
       BUNDLE_PATH: target/release/bundle/osx/meatshell.app
 
     steps:
-      - name: Check out repository
+      - name: Check out
         uses: actions/checkout@v4
-
-      - name: Resolve release variables
-        id: release_vars
-        shell: bash
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
-
-          if [[ ! "${tag}" =~ ^v ]]; then
-            echo "tag must start with v, got: ${tag}" >&2
-            exit 1
-          fi
-
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "asset_name=${APP_NAME}-macos-${tag}.zip" >> "${GITHUB_OUTPUT}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,12 +31,18 @@ jobs:
       - name: Install cargo-bundle
         run: cargo install cargo-bundle --locked
 
-      - name: Check out selected tag for manual runs
-        if: github.event_name == 'workflow_dispatch'
-        run: git checkout "${{ steps.release_vars.outputs.tag }}"
-
       - name: Build macOS app bundle
         run: cargo bundle --release
+
+      - name: Set asset name
+        id: asset
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "name=${APP_NAME}-macos-main.zip" >> "${GITHUB_OUTPUT}"
+          else
+            echo "name=${APP_NAME}-macos-${GITHUB_REF_NAME}.zip" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Zip macOS app
         shell: bash
@@ -67,14 +50,22 @@ jobs:
           test -d "${BUNDLE_PATH}"
           ditto -c -k --sequesterRsrc --keepParent \
             "${BUNDLE_PATH}" \
-            "${{ steps.release_vars.outputs.asset_name }}"
+            "${{ steps.asset.outputs.name }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.asset.outputs.name }}
+          path: ${{ steps.asset.outputs.name }}
+          if-no-files-found: error
 
       - name: Create or update GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_vars.outputs.tag }}
-          name: ${{ steps.release_vars.outputs.tag }}
-          files: ${{ steps.release_vars.outputs.asset_name }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: ${{ steps.asset.outputs.name }}
           fail_on_unmatched_files: true
-          generate_release_notes: ${{ github.event_name == 'push' }}
+          generate_release_notes: true
           overwrite_files: true
