@@ -1,0 +1,80 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-app:
+    name: Build and Upload macOS App
+    runs-on: macos-latest
+    env:
+      CARGO_TERM_COLOR: always
+      APP_NAME: meatshell
+      BUNDLE_PATH: target/release/bundle/osx/meatshell.app
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release variables
+        id: release_vars
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${tag}" =~ ^v ]]; then
+            echo "tag must start with v, got: ${tag}" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "asset_name=${APP_NAME}-macos-${tag}.zip" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
+      - name: Check out selected tag for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: git checkout "${{ steps.release_vars.outputs.tag }}"
+
+      - name: Build macOS app bundle
+        run: cargo bundle --release
+
+      - name: Zip macOS app
+        shell: bash
+        run: |
+          test -d "${BUNDLE_PATH}"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${BUNDLE_PATH}" \
+            "${{ steps.release_vars.outputs.asset_name }}"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_vars.outputs.tag }}
+          name: ${{ steps.release_vars.outputs.tag }}
+          files: ${{ steps.release_vars.outputs.asset_name }}
+          fail_on_unmatched_files: true
+          generate_release_notes: ${{ github.event_name == 'push' }}
+          overwrite_files: true

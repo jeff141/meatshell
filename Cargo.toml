@@ -52,3 +52,11 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 1
+
+[package.metadata.bundle]
+name = "meatshell"
+identifier = "com.jeff141.meatshell"
+icon = ["assets/icon.png", "assets/icon@512.png"]
+category = "public.app-category.developer-tools"
+short_description = "A lightweight FinalShell-style SSH client"
+long_description = "A lightweight FinalShell-style SSH/terminal client written in Rust + Slint."
