@@ -224,12 +224,15 @@ export component TerminalView inherits Rectangle {
                 // makes Slint compute one text layout *inside* another, which
                 // re-enters parley's FontContext RefCell and panics ("already
                 // borrowed").  A plain bool flag is safe.
-                if root.is-alt-screen : Text {
-                    text: "[ALT]";
-                    color: Theme.success;
-                    font-size: Theme.fs-xs;
-                    vertical-alignment: center;
-                    padding-right: 4px;
+                if root.is-alt-screen : Rectangle {
+                    width: alt-label.preferred-width + 4px;
+                    height: parent.height;
+                    alt-label := Text {
+                        text: "[ALT]";
+                        color: Theme.success;
+                        font-size: Theme.fs-xs;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
