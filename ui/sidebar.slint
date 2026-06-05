@@ -86,8 +86,9 @@ component NetGraph inherits VerticalLayout {
     HorizontalLayout {
         spacing: 3px;
         Text {                              // ↑ upload (green)
-            text: "\u{2191}";
-                       color: Theme.success;
+            text: "\u{E5D8}";
+            font-family: "Material Icons";
+            color: Theme.success;
             font-size: Theme.fs-xs;
             vertical-alignment: center;
         }
@@ -98,8 +99,9 @@ component NetGraph inherits VerticalLayout {
             vertical-alignment: center;
         }
         Text {                              // ↓ download (blue)
-            text: "\u{2193}";
-                       color: Theme.accent;
+            text: "\u{E5DB}";
+            font-family: "Material Icons";
+            color: Theme.accent;
             font-size: Theme.fs-xs;
             vertical-alignment: center;
         }
@@ -128,8 +130,9 @@ component NetGraph inherits VerticalLayout {
                     overflow: elide;
                 }
                 Text {
-                    text: "\u{2193}";
-                                       color: Theme.text-muted;
+                    text: "\u{E5CF}";
+                    font-family: "Material Icons";
+                    color: Theme.text-muted;
                     font-size: 8px;
                     vertical-alignment: center;
                 }
@@ -376,7 +379,7 @@ export component Sidebar inherits Rectangle {
         }
 
         Text {
-            text: "meatshell v0.2";
+            text: "meatshell v0.2.1";
             color: Theme.text-muted;
             font-size: Theme.fs-xs;
             horizontal-alignment: center;

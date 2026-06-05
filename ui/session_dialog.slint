@@ -29,6 +29,7 @@ export component SessionDialog inherits Rectangle {
 
     callback submit(SessionDraft);
     callback cancel();
+    callback pick-key-file();   // open a native file picker for the private key
 
     visible: is-open;
     background: #000000aa;
@@ -153,10 +154,65 @@ export component SessionDialog inherits Rectangle {
                 value <=> root.draft-password;
             }
 
-            if root.draft-auth == "key" : LabeledInput {
-                label: "私钥路径";
-                placeholder: "C:\\Users\\you\\.ssh\\id_ed25519";
-                value <=> root.draft-key-path;
+            if root.draft-auth == "key" : VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "私钥文件";
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-sm;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        height: 32px;
+                        horizontal-stretch: 1;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: keyin.has-focus ? Theme.accent : Theme.border-subtle;
+                        background: Theme.bg-root;
+                        keyin := TextInput {
+                            x: 10px; y: 0px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            text <=> root.draft-key-path;
+                            color: Theme.text-primary;
+                            font-size: Theme.fs-md;
+                            vertical-alignment: center;
+                            single-line: true;
+                        }
+                        if root.draft-key-path == "" : Text {
+                            x: 10px; y: 0px;
+                            height: parent.height;
+                            text: "/home/you/.ssh/id_ed25519";
+                            color: Theme.text-muted;
+                            font-size: Theme.fs-md;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: 64px; height: 32px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        background: browse-ta.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                        Text {
+                            text: "浏览…";
+                            color: Theme.text-primary;
+                            font-size: Theme.fs-sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        browse-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.pick-key-file(); }
+                        }
+                    }
+                }
+                Text {
+                    text: "选择私钥本身（不是 .pub 公钥文件）";
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                }
             }
 
             Rectangle { vertical-stretch: 1; }

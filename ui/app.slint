@@ -1,3 +1,14 @@
+// Embedded cross-platform fonts (compile-time): terminal monospace + UI icons.
+// Embedding means Windows / Linux / macOS all render the same glyphs without
+// relying on Consolas / Segoe MDL2 Assets being installed.
+//
+// Cascadia Mono: full box-drawing + block-elements + braille (needed by btop
+//   for its sparkline graphs; JetBrains Mono lacks braille → garbled output).
+// Material Icons: open-source icon font replacing Windows-only Segoe MDL2 Assets.
+import "fonts/CascadiaMono-Regular.ttf";
+import "fonts/CascadiaMono-Bold.ttf";
+import "fonts/MaterialIcons-Regular.ttf";
+
 import { Theme } from "theme.slint";
 import { Sidebar, DiskInfo } from "sidebar.slint";
 import { TabBar, TabInfo } from "tabs.slint";
@@ -93,9 +104,6 @@ export component AppWindow inherits Window {
     in-out property <string> active-tab-id: "welcome";
     in property <[TerminalState]> terminals;
 
-    // Terminal monospace font (set from Rust via cfg!()).
-    in-out property <string> term-font: "monospace";
-
     // --- Dialog state ------------------------------------------------------
     in-out property <bool> dialog-open: false;
     in-out property <bool> dialog-editing: false;
@@ -115,6 +123,7 @@ export component AppWindow inherits Window {
     callback remove-session(string /* session-id */);
     callback session-dialog-submit(SessionDraft);
     callback session-dialog-cancel();
+    callback session-dialog-pick-key();
 
     callback tab-selected(string);
     callback tab-closed(string);
@@ -159,6 +168,7 @@ export component AppWindow inherits Window {
     callback term-select-start(string /* tab-id */, int /* row */, int /* col */);
     callback term-select-update(string /* tab-id */, int /* row */, int /* col */);
     callback term-select-end(string /* tab-id */);
+    callback term-select-autoscroll(string /* tab-id */, int /* dir */);
 
     HorizontalLayout {
         spacing: 0;
@@ -225,7 +235,6 @@ export component AppWindow inherits Window {
                     width: term.id == root.active-tab-id ? parent.width : 0px;
                     height: term.id == root.active-tab-id ? parent.height : 0px;
                     tab-id: term.id;
-                    term-font: root.term-font;
                     status-line: term.status;
                     spans: term.spans;
                     cursor-row: term.cursor-row;
@@ -258,6 +267,7 @@ export component AppWindow inherits Window {
                     select-start(r, c) => { root.term-select-start(term.id, r, c); }
                     select-update(r, c) => { root.term-select-update(term.id, r, c); }
                     select-end() => { root.term-select-end(term.id); }
+                    select-autoscroll(dir) => { root.term-select-autoscroll(term.id, dir); }
                 }
             }
         }
@@ -280,8 +290,9 @@ export component AppWindow inherits Window {
             }
         }
         Text {
-            text: "\u{2699}";              // MDL2 Settings gear
-                       color: Theme.text-secondary;
+            text: "\u{E8B8}";              // Material Icons settings (gear)
+            font-family: "Material Icons";
+            color: Theme.text-secondary;
             font-size: Theme.fs-md;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -303,8 +314,9 @@ export component AppWindow inherits Window {
             }
         }
         Text {
-            text: "\u{2B07}";              // MDL2 Download
-                       color: Theme.text-secondary;
+            text: "\u{E2C4}";              // Material Icons file_download
+            font-family: "Material Icons";
+            color: Theme.text-secondary;
             font-size: Theme.fs-md;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -352,7 +364,8 @@ export component AppWindow inherits Window {
                         mouse-cursor: pointer;
                         clicked => { root.download-open = false; }
                     }
-                    Text { text: "\u{2715}";                           color: Theme.text-secondary; font-size: Theme.fs-sm;
+                    Text { text: "\u{E5CD}"; font-family: "Material Icons";
+                           color: Theme.text-secondary; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
                 }
             }
@@ -525,7 +538,7 @@ export component AppWindow inherits Window {
                 }
                 HorizontalLayout {
                     padding-left: 8px; spacing: 8px;
-                    Text { text: "\u{24D8}"; // Info
+                    Text { text: "\u{E88E}"; font-family: "Material Icons"; // Info
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            vertical-alignment: center; }
                     Text { text: "关于"; color: Theme.text-primary; font-size: Theme.fs-md;
@@ -579,7 +592,8 @@ export component AppWindow inherits Window {
                             mouse-cursor: pointer;
                             clicked => { root.about-open = false; }
                         }
-                        Text { text: "\u{2715}";                               color: Theme.text-secondary; font-size: Theme.fs-sm;
+                        Text { text: "\u{E5CD}"; font-family: "Material Icons";
+                               color: Theme.text-secondary; font-size: Theme.fs-sm;
                                horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
@@ -640,5 +654,6 @@ export component AppWindow inherits Window {
         draft-key-path <=> root.dialog-key-path;
         submit(draft) => { root.session-dialog-submit(draft); }
         cancel => { root.session-dialog-cancel(); }
+        pick-key-file => { root.session-dialog-pick-key(); }
     }
 }

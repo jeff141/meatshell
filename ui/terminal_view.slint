@@ -1,16 +1,27 @@
 import { Theme } from "theme.slint";
 import { SftpPanel, SftpEntry, SftpTreeNode } from "sftp_panel.slint";
 
+// Embed the terminal fonts here too so the cell-probe Text below measures
+// with the CORRECT font (Cascadia Mono), not a system fallback.  Font imports
+// in app.slint are globally available in theory, but some Slint builds only
+// register them in the entry-point file's component tree; importing them here
+// guarantees the probe uses Cascadia Mono for its preferred-width calculation.
+import "fonts/CascadiaMono-Regular.ttf";
+import "fonts/CascadiaMono-Bold.ttf";
+
 // One coloured run of text on the terminal grid.  The Rust side groups
-// consecutive vt100 cells that share a foreground colour + bold flag into a
-// single span and tags it with its grid position (row, col), so the UI can
-// place it with absolute coordinates on the monospace grid.
+// consecutive vt100 cells that share fg + bg + bold into a single span and
+// tags it with its grid position (row, col) and width in cells, so the UI can
+// place both a background fill and the text with absolute monospace coordinates.
+// `bg` is transparent (alpha 0) when the cell uses the default background.
 export struct TermSpan {
     text: string,
     fg: color,
+    bg: color,
     bold: bool,
     row: int,
     col: int,
+    cells: int,
 }
 
 // A find-match highlight rectangle on the terminal grid.
@@ -41,7 +52,8 @@ component MenuItem inherits Rectangle {
         spacing: 8px;
         Text {
             text: root.icon;
-                       color: Theme.text-secondary;
+            font-family: "Material Icons";
+            color: Theme.text-secondary;
             font-size: Theme.fs-sm;
             vertical-alignment: center;
         }
@@ -65,10 +77,6 @@ export component TerminalView inherits Rectangle {
     in property <int> cursor-col;
     in property <int> rows-used;        // content rows, for viewport sizing
     in property <bool>   is-alt-screen;
-
-    // Platform-specific monospace font: set from Rust via cfg!(); cell-probe
-    // and span rendering share this property so measurement always matches.
-    in property <string> term-font: "monospace";
     in property <[TermMatch]> find-matches; // search-highlight rectangles
     in property <[TermMatch]> selection;    // drag-selection highlight rectangles
 
@@ -98,12 +106,17 @@ export component TerminalView inherits Rectangle {
     callback select-start(int, int);        // begin drag-selection at (row, col)
     callback select-update(int, int);       // extend drag-selection to (row, col)
     callback select-end();                  // finish selection → copy to clipboard
+    callback select-autoscroll(int);        // auto-scroll while dragging past edge (dir: -1 up / +1 down)
 
     // Right-click context-menu anchor + find-bar visibility (private UI state).
     property <length> ctx-x;
     property <length> ctx-y;
     property <bool> find-active: false;
     property <bool> selecting: false;
+    // Auto-scroll direction while drag-selecting past the visible edge.
+    // 0 = none, -1 = above top (scroll to older), +1 = below bottom (newer).
+    property <int> autoscroll-dir: 0;
+    property <length> vis-y: 0px;   // scratch: cursor Y within the visible viewport
 
     background: Theme.term-bg;
     forward-focus: ime-input;
@@ -122,12 +135,26 @@ export component TerminalView inherits Rectangle {
     // includes left/right side bearings and is wider than the real per-character
     // advance, which would make absolutely-positioned spans drift apart.  The
     // average advance over a long run (side bearings amortised) is accurate.
+    // Cell-size probe: must be RENDERED (opacity:0, not visible:false) so Slint
+    // resolves the correct embedded font before computing preferred-width/height.
+    // visible:false can skip font loading and fall back to a system font (e.g.
+    // Consolas ~6.5 px/char instead of Cascadia Mono ~7.6 px/char), giving a
+    // cell-w that is too narrow and a term-cols that is too large.
     cell-probe := Text {
-        text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM"; // 50×M
-        font-family: root.term-font;
+        text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM"; // exactly 50×M
+        font-family: "Cascadia Mono";
         font-size: Theme.fs-md;
-        visible: false;
+        // Keep it in layout but invisible: opacity:0 forces full font loading.
+        opacity: 0;
+        // Park it at y<0 so it never overlaps terminal content.
+        y: -200px;
+        width: 0px; // zero out layout contribution
+        height: 0px;
     }
+    // cell-w / cell-h come straight from the probe so they ALWAYS match the
+    // font the spans below are actually rendered with.  (Forcing a hard-coded
+    // minimum here is dangerous: if the spans fall back to a system font, a
+    // mismatched cell-w garbles the grid.  Keep them derived from one source.)
     property <length> cell-w: max(1px, cell-probe.preferred-width / 50);
     property <length> cell-h: max(1px, cell-probe.preferred-height);
     // Usable text box = root.width minus the 10px left/right padding of
@@ -147,11 +174,10 @@ export component TerminalView inherits Rectangle {
 
     changed spans => {
         // Bash: keep the latest output pinned to the bottom.
-        // Alt-screen (nano/vim/htop): the program owns a fixed full screen, so
-        // the viewport must stay top-aligned (viewport-y = 0).  Scrolling to the
-        // bottom here would push the title bar + content off the top of the
-        // visible area, leaving only the program's status bar — exactly the
-        // "nano shows nothing" symptom.
+        // Alt-screen (nano/vim/htop/btop): the program owns a fixed full screen,
+        // so the viewport must stay top-aligned (viewport-y = 0).  Scrolling to
+        // the bottom would push the title bar + content off the top, leaving only
+        // the program's status bar — exactly the "nano shows nothing" symptom.
         if (!root.is-alt-screen) {
             flickable.viewport-y = flickable.height - flickable.viewport-height;
         } else {
@@ -159,10 +185,13 @@ export component TerminalView inherits Rectangle {
         }
     }
     changed is-alt-screen => {
-        // Reset scroll on every mode switch (entering/leaving nano, vim, …).
+        // Reset scroll on every mode switch (entering/leaving nano, vim, btop…).
+        // Snapping to top on alt-screen entry ensures the full-screen program's
+        // frame is shown from row 0, not from wherever history left off.
         if (root.is-alt-screen) {
             flickable.viewport-y = 0;
         } else {
+            // Return to normal mode: pin to the most recent output.
             flickable.viewport-y = flickable.height - flickable.viewport-height;
         }
     }
@@ -190,6 +219,18 @@ export component TerminalView inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
+                // Alt-screen indicator only.  IMPORTANT: never put cell-w / cell-h
+                // (a Text's preferred-size) inside another Text's `text` — doing so
+                // makes Slint compute one text layout *inside* another, which
+                // re-enters parley's FontContext RefCell and panics ("already
+                // borrowed").  A plain bool flag is safe.
+                if root.is-alt-screen : Text {
+                    text: "[ALT]";
+                    color: Theme.success;
+                    font-size: Theme.fs-xs;
+                    vertical-alignment: center;
+                    padding-right: 4px;
+                }
             }
         }
 
@@ -211,6 +252,15 @@ export component TerminalView inherits Rectangle {
                 running: ime-input.has-focus;
                 interval: 530ms;
                 triggered => { key-capture.cursor-blink = !key-capture.cursor-blink; }
+            }
+
+            // Auto-scroll while the drag-selection is held past the top/bottom
+            // edge: ticks repeatedly so the scrollback keeps moving even when the
+            // mouse is held still beyond the edge.
+            Timer {
+                running: root.selecting && root.autoscroll-dir != 0;
+                interval: 50ms;
+                triggered => { root.select-autoscroll(root.autoscroll-dir); }
             }
 
             VerticalLayout {
@@ -269,21 +319,42 @@ export component TerminalView inherits Rectangle {
                                     } else if (ev.button == PointerEventButton.left
                                             && root.selecting) {
                                         root.selecting = false;
+                                        root.autoscroll-dir = 0;
                                         root.select-end();
                                     }
                                 }
                             }
                             moved => {
                                 if (root.selecting) {
+                                    // Position of the cursor within the *visible*
+                                    // viewport (body-touch sits on the grid Rectangle
+                                    // at content y=8px; viewport-y offsets the scroll).
                                     root.select-update(
                                         floor(self.mouse-y / root.cell-h),
                                         floor(self.mouse-x / root.cell-w));
+                                    if (!root.is-alt-screen) {
+                                        // vy ∈ [0, flickable.height] = where the mouse
+                                        // is inside the visible window.
+                                        root.vis-y = self.mouse-y + 8px + flickable.viewport-y;
+                                        if (root.vis-y < root.cell-h) {
+                                            root.autoscroll-dir = -1;       // past top → older
+                                        } else if (root.vis-y > flickable.height - root.cell-h) {
+                                            root.autoscroll-dir = 1;        // past bottom → newer
+                                        } else {
+                                            root.autoscroll-dir = 0;
+                                        }
+                                    }
                                 }
                             }
                             scroll-event(ev) => {
                                 // Wheel scrolls the scrollback history (~3 lines
                                 // per notch).  Positive delta-y = scroll up = older.
-                                root.terminal-scroll(ev.delta-y > 0 ? 3 : -3);
+                                // In alt-screen mode (vim/nano/btop) the program
+                                // handles scroll itself — suppress our history scroll
+                                // so the full-screen UI isn't pushed out of view.
+                                if (!root.is-alt-screen) {
+                                    root.terminal-scroll(ev.delta-y > 0 ? 3 : -3);
+                                }
                                 accept
                             }
                         }
@@ -307,14 +378,27 @@ export component TerminalView inherits Rectangle {
                             border-radius: 2px;
                         }
 
-                        for span in root.spans : Text {
+                        // Each span = a background fill (transparent for the
+                        // default bg) with its text on top.  Wrapping the Text in
+                        // the bg Rectangle keeps one element per span and renders
+                        // btop/htop/mc panels, meter bars and graph fills.
+                        for span in root.spans : Rectangle {
                             x: span.col * root.cell-w;
                             y: span.row * root.cell-h;
-                            text: span.text;
-                            color: span.fg;
-                            font-family: root.term-font;
-                            font-size: Theme.fs-md;
-                            font-weight: span.bold ? 700 : 400;
+                            width: span.cells * root.cell-w;
+                            height: root.cell-h;
+                            background: span.bg;
+                            // Auto-sized Text (no width/height bindings) so its
+                            // layout never re-enters parley's FontContext.
+                            Text {
+                                x: 0px;
+                                y: 0px;
+                                text: span.text;
+                                color: span.fg;
+                                font-family: "Cascadia Mono";
+                                font-size: Theme.fs-md;
+                                font-weight: span.bold ? 700 : 400;
+                            }
                         }
 
                         // Blinking block cursor (overlay, decoupled from text).
@@ -344,19 +428,19 @@ export component TerminalView inherits Rectangle {
                                     padding: 4px;
                                     spacing: 1px;
                                     MenuItem {
-                                        icon: "\u{2398}"; label: "复制";
+                                        icon: "\u{E14D}"; label: "复制";
                                         clicked => { root.copy-terminal-text(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{2399}"; label: "粘贴";
+                                        icon: "\u{E14F}"; label: "粘贴";
                                         clicked => { root.paste-from-clipboard(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{2718}"; label: "清空缓存";
+                                        icon: "\u{E872}"; label: "清空缓存";
                                         clicked => { root.clear-terminal(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{2315}"; label: "查找";
+                                        icon: "\u{E8B6}"; label: "查找";
                                         clicked => { root.find-active = true; }
                                     }
                                 }
@@ -410,9 +494,6 @@ export component TerminalView inherits Rectangle {
 
                 key-pressed(event) => {
                     // ── Copy: Ctrl+Shift+C (Win/Linux) or Cmd+Shift+C (macOS)
-                    // On Windows event.text contains "\u{0003}"; on Linux/winit
-                    // text is empty for modifier combos; on macOS Cmd sends
-                    // the literal letter.
                     if ((event.modifiers.control || event.modifiers.meta)
                             && event.modifiers.shift
                             && (event.text == "c" || event.text == "C"
@@ -467,8 +548,9 @@ export component TerminalView inherits Rectangle {
                     padding: 6px;
                     spacing: 6px;
                     Text {
-                        text: "\u{2315}";
-                                               color: Theme.text-secondary;
+                        text: "\u{E8B6}";
+                        font-family: "Material Icons";
+                        color: Theme.text-secondary;
                         font-size: Theme.fs-sm;
                         vertical-alignment: center;
                     }
@@ -512,8 +594,9 @@ export component TerminalView inherits Rectangle {
                             }
                         }
                         Text {
-                            text: "\u{2715}";
-                                                       color: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            text: "\u{E5CD}";
+                            font-family: "Material Icons";
+                            color: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
                             font-size: Theme.fs-sm;
                             horizontal-alignment: center;
                             vertical-alignment: center;

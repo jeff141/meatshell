@@ -32,6 +32,23 @@ struct TermBuffer {
     view_offset: usize,
     /// Plain text of the rows currently displayed (drives find + selection).
     displayed_text: Vec<String>,
+    /// CSI-scanner state for rewriting HVP (`ESC [ … f`) into CUP (`ESC [ … H`).
+    /// vt100 0.15 only implements the `H` final byte, not the equivalent `f`
+    /// that btop/htop use for cursor positioning — without this rewrite their
+    /// absolute-positioned full-screen output collapses into a scrolling mess.
+    /// Kept here so a sequence split across read chunks is still translated.
+    csi_state: CsiState,
+}
+
+/// Minimal CSI-final-byte rewriter state (persists across read chunks).
+#[derive(Clone, Copy, PartialEq)]
+enum CsiState {
+    /// Normal text.
+    Normal,
+    /// Saw ESC (0x1b), waiting to see if it starts a CSI (`[`).
+    Esc,
+    /// Inside a CSI sequence (after `ESC [`), scanning params/intermediates.
+    Csi,
 }
 
 type TermBuffers = Arc<Mutex<HashMap<String, TermBuffer>>>;
@@ -168,18 +185,12 @@ pub fn run() -> Result<()> {
     let last_term_size: Arc<Mutex<(u32, u32)>> = Arc::new(Mutex::new((80, 24)));
 
     // --- Build window + models ------------------------------------------
+    // Set the Wayland app_id / X11 WM_CLASS *before* the window is created so
+    // the Linux desktop shell can match the running window to the installed
+    // `meatshell.desktop` entry and show our icon in the dock/taskbar.  (On
+    // Windows the icon comes from the embedded .ico, so this is a no-op there.)
+    let _ = slint::set_xdg_app_id("meatshell");
     let window = AppWindow::new().context("failed to build Slint window")?;
-
-    // Set the terminal monospace font per platform so cell-probe and span
-    // rendering always measure/display with the same system font.
-    let term_font = if cfg!(target_os = "windows") {
-        "Consolas"
-    } else if cfg!(target_os = "macos") {
-        "Menlo"
-    } else {
-        "Cascadia Code"
-    };
-    window.set_term_font(term_font.into());
 
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
@@ -656,7 +667,8 @@ fn wire_session_callbacks(
                 user: draft.user.to_string(),
                 auth: AuthMethod::from_str(&draft.auth.to_string()),
                 password: draft.password.to_string(),
-                private_key_path: draft.private_key_path.to_string(),
+                // Store the key path with forward slashes uniformly.
+                private_key_path: draft.private_key_path.to_string().replace('\\', "/"),
                 last_used: None,
             };
             {
@@ -679,6 +691,27 @@ fn wire_session_callbacks(
         window.on_session_dialog_cancel(move || {
             if let Some(w) = weak.upgrade() {
                 w.set_dialog_open(false);
+            }
+        });
+    }
+
+    // Private-key file picker: pick the private key and store its path with
+    // forward-slash separators (uniform across Windows/Linux; russh accepts them).
+    {
+        let weak = window.as_weak();
+        window.on_session_dialog_pick_key(move || {
+            let mut dialog = rfd::FileDialog::new().set_title("选择私钥文件");
+            // Start in ~/.ssh if it exists.
+            if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().join(".ssh")) {
+                if home.is_dir() {
+                    dialog = dialog.set_directory(home);
+                }
+            }
+            if let Some(file) = dialog.pick_file() {
+                let path = file.to_string_lossy().replace('\\', "/");
+                if let Some(w) = weak.upgrade() {
+                    w.set_dialog_key_path(path.into());
+                }
             }
         });
     }
@@ -759,6 +792,7 @@ fn wire_session_callbacks(
                     prev: Vec::new(),
                     view_offset: 0,
                     displayed_text: Vec::new(),
+                    csi_state: CsiState::Normal,
                 },
             );
             // Start in cd-auto-follow mode (flag = false → follow cd).
@@ -2191,6 +2225,54 @@ fn wire_key_input(
             }
         });
     }
+    // Auto-scroll while drag-selecting past the visible top/bottom edge.  We
+    // move the scrollback view by a couple of lines per tick and shift the
+    // selection anchor by the same amount so it stays pinned to its content
+    // while the end is parked at the edge row.
+    {
+        let bufs_sel = bufs.clone();
+        let weak = window.as_weak();
+        window.on_term_select_autoscroll(move |tab_id: SharedString, dir: i32| {
+            let tid = tab_id.to_string();
+            {
+                let mut map = bufs_sel.lock().unwrap();
+                let Some(buf) = map.get_mut(&tid) else { return };
+                // No scrollback on the alternate screen (vim/btop own the view).
+                if buf.parser.screen().alternate_screen() {
+                    return;
+                }
+                let rows = buf.parser.screen().size().0;
+                let last = rows.saturating_sub(1);
+                let max_off = buf.history.len();
+                let step = 2usize;
+                let Some((sr, sc, _er, ec)) = buf.sel else { return };
+                if dir < 0 {
+                    // Mouse above the top → reveal older lines.
+                    let new_off = (buf.view_offset + step).min(max_off);
+                    let delta = new_off - buf.view_offset;
+                    if delta == 0 {
+                        return; // already at the oldest line
+                    }
+                    buf.view_offset = new_off;
+                    let nsr = ((sr as usize) + delta).min(last as usize) as u16;
+                    buf.sel = Some((nsr, sc, 0, ec));
+                } else if dir > 0 {
+                    // Mouse below the bottom → move toward the live tail.
+                    let new_off = buf.view_offset.saturating_sub(step);
+                    let delta = buf.view_offset - new_off;
+                    if delta == 0 {
+                        return; // already at the live bottom
+                    }
+                    buf.view_offset = new_off;
+                    let nsr = (sr as i32 - delta as i32).max(0) as u16;
+                    buf.sel = Some((nsr, sc, last, ec));
+                }
+            }
+            if let Some(win) = weak.upgrade() {
+                rebuild_tab_display(&win, &bufs_sel, &tid);
+            }
+        });
+    }
 }
 
 /// Mutate the `TerminalState` whose id matches `tab_id` in the live model.
@@ -2386,8 +2468,10 @@ struct BuiltScreen {
 struct HistSpan {
     text: String,
     fg: slint::Color,
+    bg: slint::Color,
     bold: bool,
     col: i32,
+    cells: i32,
 }
 
 /// A rendered line: plain text (one char per cell, for find/selection) + runs.
@@ -2398,44 +2482,68 @@ const MAX_HISTORY: usize = 100_000;
 
 /// Build one screen row into `(plain_text, coloured_runs)`.  `plain` carries one
 /// char per cell (space for blanks) so a char index equals the grid column.
+/// Effective (contents, fg, bg, bold) for one grid cell, applying reverse-video.
+/// `contents` is always one display string (" " for a blank cell).
+fn cell_attrs(
+    screen: &vt100::Screen,
+    r: u16,
+    c: u16,
+) -> (String, vt100::Color, vt100::Color, bool) {
+    match screen.cell(r, c) {
+        Some(cell) => {
+            let (mut fg, mut bg) = (cell.fgcolor(), cell.bgcolor());
+            if cell.inverse() {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let s = cell.contents();
+            let s = if s.is_empty() { " ".to_string() } else { s };
+            (s, fg, bg, cell.bold())
+        }
+        None => (
+            " ".to_string(),
+            vt100::Color::Default,
+            vt100::Color::Default,
+            false,
+        ),
+    }
+}
+
 fn build_row(screen: &vt100::Screen, r: u16, cols: u16) -> Line {
     let mut plain = String::with_capacity(cols as usize);
     let mut runs: Vec<HistSpan> = Vec::new();
     let mut c = 0u16;
     while c < cols {
-        let cell = screen.cell(r, c);
-        let s = cell.map(|x| x.contents()).unwrap_or_default();
-        if s.is_empty() || s == " " {
-            plain.push(' ');
-            c += 1;
-            continue;
-        }
-        let cell = cell.unwrap();
-        let fg = cell.fgcolor();
-        let bold = cell.bold();
+        let (s, fg, bg, bold) = cell_attrs(screen, r, c);
+        // Group consecutive cells that share fg + bg + bold into one run.  Unlike
+        // before we keep blank cells *inside* a run (so a coloured bar made of
+        // spaces still gets a background fill) and break only on attribute change.
         let start_col = c;
-        let mut text = s;
-        plain.push_str(&text);
+        let mut text = s.clone();
+        plain.push_str(&s);
         c += 1;
         while c < cols {
-            match screen.cell(r, c) {
-                Some(cc) => {
-                    let cs = cc.contents();
-                    if cs.is_empty() || cs == " " || cc.fgcolor() != fg || cc.bold() != bold {
-                        break;
-                    }
-                    plain.push_str(&cs);
-                    text.push_str(&cs);
-                    c += 1;
-                }
-                None => break,
+            let (cs, cfg, cbg, cbold) = cell_attrs(screen, r, c);
+            if cfg != fg || cbg != bg || cbold != bold {
+                break;
             }
+            plain.push_str(&cs);
+            text.push_str(&cs);
+            c += 1;
+        }
+        let cells = (c - start_col) as i32;
+        let is_blank = text.chars().all(|ch| ch == ' ');
+        let bg_default = matches!(bg, vt100::Color::Default);
+        // Skip runs that contribute nothing visible: blank text *and* default bg.
+        if is_blank && bg_default {
+            continue;
         }
         runs.push(HistSpan {
             text,
             fg: vt_color_to_slint(fg, bold),
+            bg: vt_bg_to_slint(bg),
             bold,
             col: start_col as i32,
+            cells,
         });
     }
     (plain, runs)
@@ -2470,7 +2578,11 @@ impl TermBuffer {
     /// after each — that way no batch ever scrolls more than the diff can see,
     /// and nothing is lost.  (Splitting only on `\n` is safe: VT escape
     /// sequences never contain a newline.)
-    fn ingest(&mut self, bytes: &[u8]) {
+    fn ingest(&mut self, raw: &[u8]) {
+        // Rewrite HVP (`ESC [ … f`) → CUP (`ESC [ … H`) so vt100 (which only
+        // implements `H`) honours btop/htop's absolute cursor positioning.
+        let bytes = self.rewrite_hvp(raw);
+        let bytes = &bytes[..];
         let rows = self.parser.screen().size().0 as usize;
         let batch_lines = (rows / 2).max(1);
         let mut start = 0usize;
@@ -2490,9 +2602,58 @@ impl TermBuffer {
         }
     }
 
+    /// Translate every CSI sequence terminated by `f` (HVP) into the identical
+    /// sequence terminated by `H` (CUP).  The scanner state persists across
+    /// calls, so a sequence split across read chunks is still handled.  Only the
+    /// final byte of a CSI sequence is ever touched; text bytes pass through.
+    fn rewrite_hvp(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        for &b in input {
+            match self.csi_state {
+                CsiState::Normal => {
+                    if b == 0x1b {
+                        self.csi_state = CsiState::Esc;
+                    }
+                    out.push(b);
+                }
+                CsiState::Esc => {
+                    if b == b'[' {
+                        self.csi_state = CsiState::Csi;
+                    } else {
+                        // Not a CSI (could be another ESC, OSC, etc.).  Re-arm on
+                        // a fresh ESC, otherwise fall back to normal text.
+                        self.csi_state = if b == 0x1b { CsiState::Esc } else { CsiState::Normal };
+                    }
+                    out.push(b);
+                }
+                CsiState::Csi => {
+                    // Final bytes are 0x40..=0x7e; params/intermediates are
+                    // 0x20..=0x3f.  Rewrite an `f` final into `H`.
+                    if (0x40..=0x7e).contains(&b) {
+                        out.push(if b == b'f' { b'H' } else { b });
+                        self.csi_state = CsiState::Normal;
+                    } else {
+                        out.push(b);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Process one bounded batch and capture any lines that scrolled off the top
     /// (skipped for alt-screen programs like vim/nano).
     fn ingest_chunk(&mut self, bytes: &[u8]) {
+        // Detect full-screen-clear sequences *before* processing so we can
+        // suppress history for programs that redraw without alt-screen (e.g.
+        // btop configured with `alt-screen = false`).
+        // We look for \033[H (cursor-home) and \033[2J / \033[J (erase display)
+        // as indicators that the program is doing a full-screen refresh.
+        let has_cursor_home   = bytes.windows(3).any(|w| w == b"\x1b[H");
+        let has_erase_display = bytes.windows(4).any(|w| w == b"\x1b[2J")
+                             || bytes.windows(3).any(|w| w == b"\x1b[J");
+        let is_fullscreen_refresh = has_cursor_home && has_erase_display;
+
         self.parser.process(bytes);
         let (is_alt, rows, cols) = {
             let s = self.parser.screen();
@@ -2500,6 +2661,17 @@ impl TermBuffer {
             (s.alternate_screen(), r, c)
         };
         if is_alt {
+            // Snap to live view whenever we're on the alt screen — this
+            // prevents old history (accumulated before alt-screen was entered)
+            // from mixing with the full-screen program's output after a scroll.
+            self.view_offset = 0;
+            self.prev.clear();
+            return;
+        }
+        if is_fullscreen_refresh {
+            // Non-alt-screen full-screen refresh (btop, htop with alt disabled…).
+            // Don't capture lines into history; they'd mix with the next frame.
+            self.view_offset = 0;
             self.prev.clear();
             return;
         }
@@ -2545,9 +2717,11 @@ impl TermBuffer {
                     spans.push(TermSpan {
                         text: hs.text.into(),
                         fg: hs.fg,
+                        bg: hs.bg,
                         bold: hs.bold,
                         row: r as i32,
                         col: hs.col,
+                        cells: hs.cells,
                     });
                 }
                 displayed.push(plain.trim_end().to_string());
@@ -2591,9 +2765,11 @@ impl TermBuffer {
                 spans.push(TermSpan {
                     text: hs.text.clone().into(),
                     fg: hs.fg,
+                    bg: hs.bg,
                     bold: hs.bold,
                     row: d as i32,
                     col: hs.col,
+                    cells: hs.cells,
                 });
             }
             displayed.push(line.0.trim_end().to_string());
@@ -2643,6 +2819,21 @@ fn vt_color_to_slint(color: vt100::Color, bold: bool) -> slint::Color {
         vt100::Color::Rgb(r, g, b) => (r, g, b),
     };
     slint::Color::from_rgb_u8(r, g, b)
+}
+
+/// Convert a vt100 *background* colour to Slint.  The default background maps to
+/// fully transparent so we don't paint a fill over the terminal's own bg (and
+/// can cheaply skip drawing it).  Non-default backgrounds (btop/htop bars,
+/// selected rows, meter fills) become opaque colours.
+fn vt_bg_to_slint(color: vt100::Color) -> slint::Color {
+    match color {
+        vt100::Color::Default => slint::Color::from_argb_u8(0, 0, 0, 0), // transparent
+        vt100::Color::Idx(i) => {
+            let (r, g, b) = idx_to_rgb(i, false);
+            slint::Color::from_rgb_u8(r, g, b)
+        }
+        vt100::Color::Rgb(r, g, b) => slint::Color::from_rgb_u8(r, g, b),
+    }
 }
 
 /// Map an xterm-256 palette index to RGB (16 ANSI + 6×6×6 cube + grayscale).

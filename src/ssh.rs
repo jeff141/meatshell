@@ -13,7 +13,7 @@ use russh::client::{self, Handle, Handler};
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh::keys::load_secret_key;
 use russh::{ChannelId, ChannelMsg, Disconnect};
-use ssh_key::PublicKey;
+use ssh_key::{HashAlg, PublicKey};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
@@ -87,10 +87,7 @@ pub fn extract_osc7_path(text: &str) -> Option<String> {
         while end < bytes.len() {
             if bytes[end] == 0x07 {
                 break;
-            } else if bytes[end] == 0x1b
-                && end + 1 < bytes.len()
-                && bytes[end + 1] == b'\\'
-            {
+            } else if bytes[end] == 0x1b && end + 1 < bytes.len() && bytes[end + 1] == b'\\' {
                 break;
             }
             end += 1;
@@ -188,7 +185,10 @@ pub enum SessionEvent {
     /// The shell's current working directory changed (parsed from OSC 7).
     CwdChanged(String),
     /// SFTP directory listing arrived.
-    SftpEntries { path: String, entries: Vec<RemoteEntry> },
+    SftpEntries {
+        path: String,
+        entries: Vec<RemoteEntry>,
+    },
     /// Free-form SFTP status message (progress, errors, etc.).
     SftpStatus(String),
     /// Directory tree structure changed (full rebuild pushed on every toggle).
@@ -248,8 +248,14 @@ pub fn spawn_session(
 
     let evt_tx_for_task = evt_tx.clone();
     let join = runtime.spawn(async move {
-        if let Err(err) =
-            run_session(session, cmd_rx, evt_tx_for_task.clone(), initial_cols, initial_rows).await
+        if let Err(err) = run_session(
+            session,
+            cmd_rx,
+            evt_tx_for_task.clone(),
+            initial_cols,
+            initial_rows,
+        )
+        .await
         {
             let _ = evt_tx_for_task.send(SessionEvent::Closed(format!("{err:#}")));
         }
@@ -295,14 +301,26 @@ async fn run_session(
             .await
             .context("password auth failed")?,
         AuthMethod::Key => {
-            if session.private_key_path.trim().is_empty() {
+            let raw = session.private_key_path.trim();
+            if raw.is_empty() {
                 return Err(anyhow!("私钥路径为空"));
             }
-            let keypair = load_secret_key(Path::new(&session.private_key_path), None)
-                .with_context(|| {
-                    format!("failed to load key {}", session.private_key_path)
-                })?;
-            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(keypair), None)
+            // Normalise separators (we store `/` everywhere) and be forgiving if
+            // the user pointed at the `.pub` *public* key — the private key is the
+            // same path without that suffix.
+            let normalised = raw.replace('\\', "/");
+            let key_path = normalised
+                .strip_suffix(".pub")
+                .map(str::to_string)
+                .unwrap_or(normalised);
+            let keypair = load_secret_key(Path::new(&key_path), None)
+                .with_context(|| format!("failed to load key {key_path}"))?;
+            let hash = if keypair.algorithm().is_rsa() {
+                Some(HashAlg::Sha256)
+            } else {
+                None
+            };
+            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(keypair), hash)
                 .context("invalid private key / hash algorithm combination")?;
             handle
                 .authenticate_publickey(&session.user, key_with_hash)
@@ -675,4 +693,3 @@ fn _assert_handle_send() {
     fn takes<T: Send>() {}
     takes::<Handle<ClientHandler>>();
 }
-
