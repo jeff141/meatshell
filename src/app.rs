@@ -2479,7 +2479,8 @@ fn wire_key_input(
                     None => String::new(),
                 }
             };
-            if cfg!(target_os = "windows") {
+            #[cfg(target_os = "windows")]
+            {
                 // Windows: arboard on a background thread to avoid re-entering
                 // the winit message loop (deadlock).
                 std::thread::spawn(move || {
@@ -2488,7 +2489,9 @@ fn wire_key_input(
                         Err(e) => tracing::warn!("copy: clipboard error: {}", e),
                     }
                 });
-            } else {
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
                 // Linux/macOS: use system clipboard commands to avoid arboard
                 // Wayland issues (clipboard data lost after Clipboard drop).
                 if let Err(e) = linux_clipboard_write(&text) {
@@ -2507,7 +2510,8 @@ fn wire_key_input(
                 .get(tab_id.as_str())
                 .map(|h| h.commands.clone());
             let Some(sender) = sender else { return };
-            if cfg!(target_os = "windows") {
+            #[cfg(target_os = "windows")]
+            {
                 std::thread::spawn(move || {
                     match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
                         Ok(text) => {
@@ -2516,7 +2520,9 @@ fn wire_key_input(
                         Err(e) => tracing::warn!("paste: clipboard error: {}", e),
                     }
                 });
-            } else {
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
                 match linux_clipboard_read() {
                     Ok(text) => {
                         let _ = sender.send(SessionCommand::RawInput(text.into_bytes()));
