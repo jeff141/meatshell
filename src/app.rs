@@ -64,7 +64,7 @@ use crate::sftp::{spawn_sftp, SftpHandle};
 use crate::ssh::{
     format_mtime, format_size, spawn_session, SessionCommand, SessionEvent, SessionHandle,
 };
-use crate::system::{format_bytes_per_sec, SystemSampler, SystemSnapshot};
+use crate::system::{format_bytes_per_sec, format_mem_mib, SystemSampler, SystemSnapshot};
 
 type SftpHandles = Arc<Mutex<HashMap<String, SftpHandle>>>;
 /// Per-tab flag: once the user explicitly navigates via the SFTP tree or
@@ -1216,8 +1216,8 @@ fn refresh_sidebar(
         win.set_cpu_percent(snap.cpu_percent);
         win.set_mem_percent(snap.mem_percent);
         win.set_swap_percent(snap.swap_percent);
-        win.set_mem_detail(format!("{}/{}M", snap.mem_used_mib, snap.mem_total_mib).into());
-        win.set_swap_detail(format!("{}/{}M", snap.swap_used_mib, snap.swap_total_mib).into());
+        win.set_mem_detail(format_mem_mib(snap.mem_used_mib, snap.mem_total_mib).into());
+        win.set_swap_detail(format_mem_mib(snap.swap_used_mib, snap.swap_total_mib).into());
     };
     let clear_stats = |win: &AppWindow| {
         win.set_cpu_percent(0.0);
@@ -1244,10 +1244,10 @@ fn refresh_sidebar(
             win.set_mem_percent(pct(st.mem_used_kib, st.mem_total_kib));
             win.set_swap_percent(pct(st.swap_used_kib, st.swap_total_kib));
             win.set_mem_detail(
-                format!("{}/{}M", st.mem_used_kib / 1024, st.mem_total_kib / 1024).into(),
+                format_mem_mib(st.mem_used_kib / 1024, st.mem_total_kib / 1024).into(),
             );
             win.set_swap_detail(
-                format!("{}/{}M", st.swap_used_kib / 1024, st.swap_total_kib / 1024).into(),
+                format_mem_mib(st.swap_used_kib / 1024, st.swap_total_kib / 1024).into(),
             );
             let (name, rx, tx) = selected_iface(&st);
             win.set_net_top_up(format_bytes_per_sec(tx).into());

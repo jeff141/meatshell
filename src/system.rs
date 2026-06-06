@@ -124,6 +124,19 @@ impl SystemSampler {
     }
 }
 
+/// Human-readable memory size from MiB (e.g. `"1.5G/16G"`).
+pub fn format_mem_mib(used_mib: u64, total_mib: u64) -> String {
+    if total_mib >= 1024 {
+        format!(
+            "{:.1}G/{:.1}G",
+            used_mib as f64 / 1024.0,
+            total_mib as f64 / 1024.0
+        )
+    } else {
+        format!("{}/{}M", used_mib, total_mib)
+    }
+}
+
 /// Human-readable network throughput (e.g. `"1.2 MB/s"`).
 pub fn format_bytes_per_sec(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];

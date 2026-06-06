@@ -35,7 +35,7 @@ component StatRow inherits HorizontalLayout {
         background: Theme.bg-root;
         border-radius: 2px;
         min-width: 60px;
-        horizontal-stretch: 1;
+        horizontal-stretch: 2;
 
         Rectangle {
             x: 0;
@@ -61,7 +61,8 @@ component StatRow inherits HorizontalLayout {
         text: detail;
         color: Theme.text-muted;
         font-size: Theme.fs-xs;
-        width: 56px;
+        min-width: 56px;
+        horizontal-stretch: 1;
         horizontal-alignment: right;
         vertical-alignment: center;
     }
