@@ -1,0 +1,193 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: meatshell\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Not connected"
+msgstr "Not connected"
+
+msgid "Local resources"
+msgstr "Local resources"
+
+msgid "Server resources"
+msgstr "Server resources"
+
+msgid "Download settings"
+msgstr "Download settings"
+
+msgid "Save downloads to:"
+msgstr "Save downloads to:"
+
+msgid "(ask every time)"
+msgstr "(ask every time)"
+
+msgid "Choose folder"
+msgstr "Choose folder"
+
+msgid "Open folder"
+msgstr "Open folder"
+
+msgid "Transfers"
+msgstr "Transfers"
+
+msgid "Clear"
+msgstr "Clear"
+
+msgid "No transfers yet"
+msgstr "No transfers yet"
+
+msgid "About"
+msgstr "About"
+
+msgid "About meatshell"
+msgstr "About meatshell"
+
+msgid "A lightweight Rust + Slint SSH terminal client by 'lil meatball'."
+msgstr "A lightweight Rust + Slint SSH terminal client by 'lil meatball'."
+
+msgid "Open source · MIT / Apache-2.0"
+msgstr "Open source · MIT / Apache-2.0"
+
+msgid "Open-source libraries used"
+msgstr "Open-source libraries used"
+
+msgid "Edit session"
+msgstr "Edit session"
+
+msgid "New session"
+msgstr "New session"
+
+msgid "Name"
+msgstr "Name"
+
+msgid "e.g. production web-01"
+msgstr "e.g. production web-01"
+
+msgid "Host / IP"
+msgstr "Host / IP"
+
+msgid "Port"
+msgstr "Port"
+
+msgid "Username"
+msgstr "Username"
+
+msgid "Authentication"
+msgstr "Authentication"
+
+msgid "Password"
+msgstr "Password"
+
+msgid "Private key"
+msgstr "Private key"
+
+msgid "Leave blank to keep the current password"
+msgstr "Leave blank to keep the current password"
+
+msgid "Private key file"
+msgstr "Private key file"
+
+msgid "Browse…"
+msgstr "Browse…"
+
+msgid "Pick the private key itself (not the .pub public key)"
+msgstr "Pick the private key itself (not the .pub public key)"
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Save"
+msgstr "Save"
+
+msgid "Create"
+msgstr "Create"
+
+msgid "SFTP not connected"
+msgstr "SFTP not connected"
+
+msgid "Upload"
+msgstr "Upload"
+
+msgid "Directory tree"
+msgstr "Directory tree"
+
+msgid "Size"
+msgstr "Size"
+
+msgid "Modified"
+msgstr "Modified"
+
+msgid "Loading..."
+msgstr "Loading..."
+
+msgid "Empty directory"
+msgstr "Empty directory"
+
+msgid "Download"
+msgstr "Download"
+
+msgid "View"
+msgstr "View"
+
+msgid "Edit"
+msgstr "Edit"
+
+msgid "Delete"
+msgstr "Delete"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "Memory"
+msgstr "Memory"
+
+msgid "Swap"
+msgstr "Swap"
+
+msgid "Local"
+msgstr "Local"
+
+msgid "Path"
+msgstr "Path"
+
+msgid "Free/Total"
+msgstr "Free/Total"
+
+msgid "Copy"
+msgstr "Copy"
+
+msgid "Paste"
+msgstr "Paste"
+
+msgid "Clear buffer"
+msgstr "Clear buffer"
+
+msgid "Find"
+msgstr "Find"
+
+msgid "meatshell — a lightweight Rust + Slint SSH client by 'lil meatball'"
+msgstr "meatshell — a lightweight Rust + Slint SSH client by 'lil meatball'"
+
+msgid "Quick connect"
+msgstr "Quick connect"
+
+msgid "+ New session"
+msgstr "+ New session"
+
+msgid "No sessions yet"
+msgstr "No sessions yet"
+
+msgid "Use 'New session' (top-right) to add your first server"
+msgstr "Use 'New session' (top-right) to add your first server"
+
+msgid "Import ~/.ssh/config"
+msgstr "Import ~/.ssh/config"
+
+msgid "Proxy (optional)"
+msgstr "Proxy (optional)"
+
+msgid "Leave blank to use $ALL_PROXY or connect directly"
+msgstr "Leave blank to use $ALL_PROXY or connect directly"

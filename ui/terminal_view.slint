@@ -71,7 +71,7 @@ component MenuItem inherits Rectangle {
 
 export component TerminalView inherits Rectangle {
     in property <string> tab-id;
-    in property <string> status-line: "未连接";
+    in property <string> status-line: @tr("Not connected");
     in property <[TermSpan]> spans;     // coloured runs of the visible screen
     in property <int> cursor-row;       // cursor cell (grid coords)
     in property <int> cursor-col;
@@ -431,19 +431,19 @@ export component TerminalView inherits Rectangle {
                                     padding: 4px;
                                     spacing: 1px;
                                     MenuItem {
-                                        icon: "\u{E14D}"; label: "复制";
+                                        icon: "\u{E14D}"; label: @tr("Copy");
                                         clicked => { root.copy-terminal-text(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E14F}"; label: "粘贴";
+                                        icon: "\u{E14F}"; label: @tr("Paste");
                                         clicked => { root.paste-from-clipboard(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E872}"; label: "清空缓存";
+                                        icon: "\u{E872}"; label: @tr("Clear buffer");
                                         clicked => { root.clear-terminal(); ime-input.focus(); }
                                     }
                                     MenuItem {
-                                        icon: "\u{E8B6}"; label: "查找";
+                                        icon: "\u{E8B6}"; label: @tr("Find");
                                         clicked => { root.find-active = true; }
                                     }
                                 }

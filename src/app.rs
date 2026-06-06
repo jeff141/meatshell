@@ -58,7 +58,8 @@ use i_slint_backend_winit::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::runtime::Runtime;
 
-use crate::config::{AuthMethod, ConfigStore, Session};
+use crate::config::{AuthMethod, ConfigStore, Secret, Session};
+use crate::i18n::t;
 use crate::sftp::{spawn_sftp, SftpHandle};
 use crate::ssh::{
     format_mtime, format_size, spawn_session, SessionCommand, SessionEvent, SessionHandle,
@@ -192,6 +193,13 @@ pub fn run() -> Result<()> {
     let _ = slint::set_xdg_app_id("meatshell");
     let window = AppWindow::new().context("failed to build Slint window")?;
 
+    // Apply the saved UI language.  The Rust-side flag drives `i18n::t(...)`;
+    // `apply_to_slint` selects the bundled `.po` for the static `@tr(...)` text
+    // (must run after the first component exists, which it now does).
+    crate::i18n::set_language(store.borrow().language());
+    crate::i18n::apply_to_slint();
+    window.set_lang_en(crate::i18n::is_en());
+
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
     sync_sessions_to_model(&store.borrow(), &sessions_model);
@@ -199,7 +207,7 @@ pub fn run() -> Result<()> {
     let tabs_model: Rc<VecModel<TabInfo>> = Rc::new(VecModel::default());
     tabs_model.push(TabInfo {
         id: "welcome".into(),
-        title: "新标签页".into(),
+        title: t("新标签页", "New tab").into(),
         kind: "welcome".into(),
         connected: false,
     });
@@ -243,6 +251,36 @@ pub fn run() -> Result<()> {
         window.on_refresh_sidebar(move || {
             if let Some(w) = weak.upgrade() {
                 refresh_sidebar(&w, &statuses, &local, &net);
+            }
+        });
+    }
+
+    // Switch UI language at runtime.  Static `@tr(...)` text updates live via
+    // select_bundled_translation; we additionally refresh the Rust-driven
+    // dynamic strings (sidebar status + the welcome tab title).
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        let tabs_model = tabs_model.clone();
+        window.on_set_language(move |code| {
+            crate::i18n::set_language(&code.to_string());
+            {
+                let mut s = store.borrow_mut();
+                s.set_language(crate::i18n::current_code().to_string());
+                let _ = s.save();
+            }
+            // Re-translate the welcome tab's dynamic title.
+            for i in 0..tabs_model.row_count() {
+                if let Some(mut row) = tabs_model.row_data(i) {
+                    if row.id.as_str() == "welcome" {
+                        row.title = t("新标签页", "New tab").into();
+                        tabs_model.set_row_data(i, row);
+                    }
+                }
+            }
+            if let Some(w) = weak.upgrade() {
+                w.set_lang_en(crate::i18n::is_en());
+                w.invoke_refresh_sidebar();
             }
         });
     }
@@ -313,24 +351,24 @@ pub fn run() -> Result<()> {
     // Open-source libraries shown in the About popup.
     {
         let libs: Vec<SharedString> = [
-            "Slint — 图形界面框架 (GUI)",
-            "russh / russh-keys — SSH 协议实现",
-            "russh-sftp — SFTP 文件传输",
-            "ssh-key — SSH 密钥解析",
-            "tokio — 异步运行时",
-            "vt100 — 终端 (VT100/xterm) 解析",
-            "sysinfo — 本机资源采集",
-            "serde / serde_json — 配置序列化",
-            "arboard — 系统剪贴板",
-            "rfd — 原生文件对话框",
-            "directories — 配置目录定位",
-            "chrono — 日期时间处理",
-            "uuid — 唯一标识符",
-            "anyhow / thiserror — 错误处理",
-            "tracing / tracing-subscriber — 日志",
-            "futures / async-trait — 异步辅助",
-            "rand — 随机数",
-            "winresource — Windows 图标/资源嵌入",
+            t("Slint — 图形界面框架 (GUI)", "Slint — GUI framework"),
+            t("russh / russh-keys — SSH 协议实现", "russh / russh-keys — SSH protocol"),
+            t("russh-sftp — SFTP 文件传输", "russh-sftp — SFTP file transfer"),
+            t("ssh-key — SSH 密钥解析", "ssh-key — SSH key parsing"),
+            t("tokio — 异步运行时", "tokio — async runtime"),
+            t("vt100 — 终端 (VT100/xterm) 解析", "vt100 — terminal (VT100/xterm) parser"),
+            t("sysinfo — 本机资源采集", "sysinfo — local resource sampling"),
+            t("serde / serde_json — 配置序列化", "serde / serde_json — config serialization"),
+            t("arboard — 系统剪贴板", "arboard — system clipboard"),
+            t("rfd — 原生文件对话框", "rfd — native file dialogs"),
+            t("directories — 配置目录定位", "directories — config dir lookup"),
+            t("chrono — 日期时间处理", "chrono — date/time handling"),
+            t("uuid — 唯一标识符", "uuid — unique identifiers"),
+            t("anyhow / thiserror — 错误处理", "anyhow / thiserror — error handling"),
+            t("tracing / tracing-subscriber — 日志", "tracing / tracing-subscriber — logging"),
+            t("futures / async-trait — 异步辅助", "futures / async-trait — async helpers"),
+            t("rand — 随机数", "rand — randomness"),
+            t("winresource — Windows 图标/资源嵌入", "winresource — Windows icon/resource embedding"),
         ]
         .iter()
         .map(|s| (*s).into())
@@ -600,10 +638,71 @@ fn wire_session_callbacks(
             w.set_dialog_auth("password".into());
             w.set_dialog_password("".into());
             w.set_dialog_key_path("".into());
+            w.set_dialog_proxy("".into());
             w.set_dialog_editing(false);
             w.set_dialog_open(true);
         }
     });
+
+    // Import hosts from ~/.ssh/config -> add them as sessions (skipping dups).
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        window.on_import_ssh_config(move || {
+            let hosts = crate::ssh_config::parse_default();
+            let mut added = 0usize;
+            if hosts.is_empty() {
+                if let Some(w) = weak.upgrade() {
+                    w.set_ssh_import_hint(t("未找到 ~/.ssh/config", "no ~/.ssh/config found").into());
+                }
+                return;
+            }
+            {
+                let mut s = store.borrow_mut();
+                for h in hosts {
+                    // Skip if a session already has this alias, or the same
+                    // host + user pair.
+                    let dup = s.sessions().iter().any(|x| {
+                        x.name == h.alias || (x.host == h.hostname && x.user == h.user)
+                    });
+                    if dup {
+                        continue;
+                    }
+                    let auth = if h.identity_file.is_empty() {
+                        AuthMethod::Password
+                    } else {
+                        AuthMethod::Key
+                    };
+                    s.upsert(Session {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: h.alias,
+                        host: h.hostname,
+                        port: h.port,
+                        user: if h.user.is_empty() { "root".into() } else { h.user },
+                        auth,
+                        password: Secret::default(),
+                        private_key_path: h.identity_file,
+                        proxy: String::new(),
+                        last_used: None,
+                    });
+                    added += 1;
+                }
+                if added > 0 {
+                    let _ = s.save();
+                }
+            }
+            sync_sessions_to_model(&store.borrow(), &sessions_model);
+            if let Some(w) = weak.upgrade() {
+                let hint = if added > 0 {
+                    format!("{} {}", t("已导入", "imported"), added)
+                } else {
+                    t("没有新主机可导入", "no new hosts to import").to_string()
+                };
+                w.set_ssh_import_hint(hint.into());
+            }
+        });
+    }
 
     // Edit -> open dialog prefilled.
     {
@@ -620,8 +719,11 @@ fn wire_session_callbacks(
                 w.set_dialog_port(session.port.to_string().into());
                 w.set_dialog_user(session.user.clone().into());
                 w.set_dialog_auth(session.auth.as_str().into());
-                w.set_dialog_password(session.password.clone().into());
+                // Never echo the stored password back into the UI (issue #10) —
+                // leave it blank; a blank field on save keeps the existing one.
+                w.set_dialog_password("".into());
                 w.set_dialog_key_path(session.private_key_path.clone().into());
+                w.set_dialog_proxy(session.proxy.clone().into());
                 w.set_dialog_editing(true);
                 w.set_dialog_open(true);
             }
@@ -655,8 +757,21 @@ fn wire_session_callbacks(
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         window.on_session_dialog_submit(move |draft: SessionDraft| {
+            let id = draft.id.to_string();
+            // The edit dialog never echoes the real password (issue #10): a blank
+            // field while editing means "keep the existing password" rather than
+            // "clear it".  Only overwrite when the user actually typed something.
+            let password = if draft.password.is_empty() {
+                store
+                    .borrow()
+                    .get(&id)
+                    .map(|s| s.password.clone())
+                    .unwrap_or_default()
+            } else {
+                Secret::new(draft.password.to_string())
+            };
             let new_session = Session {
-                id: draft.id.to_string(),
+                id,
                 name: if draft.name.is_empty() {
                     format!("{}@{}", draft.user, draft.host)
                 } else {
@@ -666,9 +781,10 @@ fn wire_session_callbacks(
                 port: if draft.port <= 0 { 22 } else { draft.port as u16 },
                 user: draft.user.to_string(),
                 auth: AuthMethod::from_str(&draft.auth.to_string()),
-                password: draft.password.to_string(),
+                password,
                 // Store the key path with forward slashes uniformly.
                 private_key_path: draft.private_key_path.to_string().replace('\\', "/"),
+                proxy: draft.proxy.to_string(),
                 last_used: None,
             };
             {
@@ -700,7 +816,7 @@ fn wire_session_callbacks(
     {
         let weak = window.as_weak();
         window.on_session_dialog_pick_key(move || {
-            let mut dialog = rfd::FileDialog::new().set_title("选择私钥文件");
+            let mut dialog = rfd::FileDialog::new().set_title(t("选择私钥文件", "Choose private key file"));
             // Start in ~/.ssh if it exists.
             if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().join(".ssh")) {
                 if home.is_dir() {
@@ -761,7 +877,7 @@ fn wire_session_callbacks(
             });
             terminals_model.push(TerminalState {
                 id: tab_id.clone().into(),
-                status: "连接中...".into(),
+                status: t("连接中...", "Connecting...").into(),
                 spans: ModelRc::from(std::rc::Rc::new(VecModel::<TermSpan>::default())),
                 cursor_row: 0,
                 cursor_col: 0,
@@ -773,7 +889,7 @@ fn wire_session_callbacks(
                 sftp_entries: ModelRc::from(
                     std::rc::Rc::new(VecModel::<SftpEntry>::default()),
                 ),
-                sftp_status: "SFTP 连接中...".into(),
+                sftp_status: t("SFTP 连接中...", "SFTP connecting...").into(),
                 sftp_loading: true,
                 sftp_tree_nodes: ModelRc::from(
                     std::rc::Rc::new(VecModel::<SftpTreeNode>::default()),
@@ -1151,7 +1267,7 @@ fn refresh_sidebar(
         win.set_disks(disk_model(&snap.disks));
     };
     let show_local_res = |win: &AppWindow| {
-        win.set_resource_title("本机资源".into());
+        win.set_resource_title(t("本机资源", "Local resources").into());
         win.set_cpu_percent(snap.cpu_percent);
         win.set_mem_percent(snap.mem_percent);
         win.set_swap_percent(snap.swap_percent);
@@ -1178,7 +1294,7 @@ fn refresh_sidebar(
         Some(st) if st.state == 1 => {
             win.set_conn_state(1);
             win.set_connection_state(st.host.clone().into());
-            win.set_resource_title("服务器资源".into());
+            win.set_resource_title(t("服务器资源", "Server resources").into());
             win.set_cpu_percent(st.cpu);
             win.set_mem_percent(pct(st.mem_used_kib, st.mem_total_kib));
             win.set_swap_percent(pct(st.swap_used_kib, st.swap_total_kib));
@@ -1202,23 +1318,23 @@ fn refresh_sidebar(
         // Disconnected / timed-out session.
         Some(st) if st.state == 2 => {
             win.set_conn_state(2);
-            win.set_connection_state(format!("{} 已断开", st.host).into());
-            win.set_resource_title("服务器资源".into());
+            win.set_connection_state(format!("{} {}", st.host, t("已断开", "disconnected")).into());
+            win.set_resource_title(t("服务器资源", "Server resources").into());
             clear_stats(win);
             set_top_local(win);
         }
         // Still connecting.
         Some(st) => {
             win.set_conn_state(0);
-            win.set_connection_state(format!("连接中 {}", st.host).into());
-            win.set_resource_title("服务器资源".into());
+            win.set_connection_state(format!("{} {}", t("连接中", "Connecting"), st.host).into());
+            win.set_resource_title(t("服务器资源", "Server resources").into());
             clear_stats(win);
             set_top_local(win);
         }
         // Welcome tab (or unknown) → local machine top + bottom.
         None => {
             win.set_conn_state(0);
-            win.set_connection_state("未连接".into());
+            win.set_connection_state(t("未连接", "Not connected").into());
             show_local_res(win);
             set_top_local(win);
         }
@@ -1321,7 +1437,7 @@ fn apply_session_event_to_window(
         }
         SessionEvent::Connected => {
             update_tab(&|t| t.connected = true);
-            update_terminal(&|t| t.status = "已连接".into());
+            update_terminal(&|t| t.status = crate::i18n::t("已连接", "Connected").into());
             if let Some(st) = statuses.lock().unwrap().get_mut(tab_id) {
                 st.state = 1;
             }
@@ -1331,7 +1447,7 @@ fn apply_session_event_to_window(
         }
         SessionEvent::Closed(reason) => {
             update_tab(&|t| t.connected = false);
-            update_terminal(&|t| t.status = format!("已断开 — {reason}").into());
+            update_terminal(&|t| t.status = format!("{} — {reason}", crate::i18n::t("已断开", "Disconnected")).into());
             if let Some(st) = statuses.lock().unwrap().get_mut(tab_id) {
                 st.state = 2;
             }
@@ -1428,8 +1544,8 @@ fn apply_session_event_to_window(
             state,
         } => {
             let detail = match state {
-                2 => "失败".to_string(),
-                1 => "已完成".to_string(),
+                2 => t("失败", "Failed").to_string(),
+                1 => t("已完成", "Done").to_string(),
                 _ => {
                     if total > 0 {
                         format!("{}/{}", format_size(transferred), format_size(total))
@@ -1949,9 +2065,11 @@ fn wire_key_input(
             }
 
             let bytes = key_to_pty_bytes(key.as_str(), ctrl, alt, app_cursor);
+            // Log only the length — never the keystroke bytes, which can be
+            // password characters (#15).
             tracing::debug!(
-                "send_key bytes={:02x?} handle_exists={}",
-                bytes,
+                "send_key len={} handle_exists={}",
+                bytes.len(),
                 handles.borrow().contains_key(tab_id.as_str()),
             );
             if !bytes.is_empty() {
@@ -1995,7 +2113,35 @@ fn wire_key_input(
                 handle.resize(cols, rows);
             }
             if let Some(buf) = bufs_resize.lock().unwrap().get_mut(tab_id.as_str()) {
-                buf.parser.set_size(rows as u16, cols as u16);
+                let (old_rows, old_cols) = buf.parser.screen().size();
+                let new_rows = rows as u16;
+                // Shrinking the grid (e.g. dragging the SFTP panel up) makes
+                // vt100's set_size truncate rows from the BOTTOM — silently
+                // dropping the most recent output + prompt (#18).  Before
+                // shrinking, save the top rows that should scroll off into our
+                // scrollback, then scroll the screen up so vt100 keeps the
+                // BOTTOM rows visible (correct terminal semantics).  Skipped on
+                // the alternate screen (vim/btop own their full-screen buffer).
+                if new_rows < old_rows && !buf.parser.screen().alternate_screen() {
+                    let delta = old_rows - new_rows;
+                    let saved: Vec<Line> = {
+                        let s = buf.parser.screen();
+                        (0..delta).map(|r| build_row(s, r, old_cols)).collect()
+                    };
+                    for line in saved {
+                        buf.history.push(line);
+                    }
+                    if buf.history.len() > MAX_HISTORY {
+                        let drop = buf.history.len() - MAX_HISTORY;
+                        buf.history.drain(0..drop);
+                    }
+                    buf.parser.process(format!("\x1b[{delta}S").as_bytes());
+                }
+                buf.parser.set_size(new_rows, cols as u16);
+                // The pre/post-resize screens differ in size+content; drop the
+                // scroll-detection snapshot so the next output isn't mis-read as
+                // a scroll (which would double-capture lines).
+                buf.prev.clear();
             }
         });
     }

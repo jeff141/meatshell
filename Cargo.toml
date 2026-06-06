@@ -1,6 +1,6 @@
 [package]
 name = "meatshell"
-version = "0.2.0"
+version = "0.2.3"
 edition = "2021"
 authors = ["meatshell contributors"]
 description = "A lightweight FinalShell-style SSH/terminal client written in Rust + Slint"
@@ -34,6 +34,13 @@ vt100 = "0.15"
 russh-sftp = "2"
 rfd = "0.15"
 arboard = "3"
+# Zeroes password buffers on drop so plaintext credentials don't linger in
+# freed heap memory (core dumps / debuggers / /proc/pid/mem).
+zeroize = "1"
+# SOCKS5 proxy tunnelling for SSH/SFTP in network-restricted environments.
+# (HTTP CONNECT proxies are handled in src/proxy.rs without an extra crate.)
+tokio-socks = "0.5"
+base64 = "0.22"
 
 [build-dependencies]
 slint-build = "1.8"

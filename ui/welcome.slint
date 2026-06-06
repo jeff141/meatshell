@@ -72,7 +72,7 @@ component SessionRow inherits Rectangle {
                         spacing: 8px;
                         alignment: center;
                         Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
-                        Text { text: "编辑"; color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: @tr("Edit"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                     }
                 }
 
@@ -92,7 +92,7 @@ component SessionRow inherits Rectangle {
                         spacing: 8px;
                         alignment: center;
                         Text { text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
-                        Text { text: "删除"; color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: @tr("Delete"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                     }
                 }
             }
@@ -149,7 +149,9 @@ component SessionRow inherits Rectangle {
 // --- Welcome ---------------------------------------------------------------
 export component Welcome inherits Rectangle {
     in property <[SessionInfo]> sessions;
+    in property <string> import-hint;        // result text after an import
     callback new-session();
+    callback import-ssh-config();
     callback connect-session(string);
     callback edit-session(string);
     callback remove-session(string);
@@ -169,7 +171,7 @@ export component Welcome inherits Rectangle {
                 font-weight: 700;
             }
             Text {
-                text: "meatshell 一个由「一坨肉」开发的轻量 Rust + Slint SSH 客户端";
+                text: @tr("meatshell — a lightweight Rust + Slint SSH client by 'lil meatball'");
                 color: Theme.text-secondary;
                 font-size: Theme.fs-md;
             }
@@ -187,16 +189,25 @@ export component Welcome inherits Rectangle {
                 spacing: 12px;
 
                 HorizontalLayout {
+                    spacing: 8px;
                     Text {
-                        text: "快速连接";
+                        text: @tr("Quick connect");
                         color: Theme.text-primary;
                         font-size: Theme.fs-lg;
                         font-weight: 600;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
+                    // Result of the last "Import ~/.ssh/config" (triggered from
+                    // the settings menu), e.g. "imported 3".
+                    Text {
+                        text: root.import-hint;
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                    }
                     PrimaryButton {
-                        text: "＋ 新建会话";
+                        text: @tr("+ New session");
                         clicked => { root.new-session(); }
                     }
                 }
@@ -212,13 +223,13 @@ export component Welcome inherits Rectangle {
                         alignment: center;
                         spacing: 6px;
                         Text {
-                            text: "尚无会话";
+                            text: @tr("No sessions yet");
                             color: Theme.text-secondary;
                             font-size: Theme.fs-md;
                             horizontal-alignment: center;
                         }
                         Text {
-                            text: "点击右上角 “新建会话” 添加你的第一台服务器";
+                            text: @tr("Use 'New session' (top-right) to add your first server");
                             color: Theme.text-muted;
                             font-size: Theme.fs-sm;
                             horizontal-alignment: center;

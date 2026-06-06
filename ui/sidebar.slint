@@ -25,8 +25,9 @@ component StatRow inherits HorizontalLayout {
         text: label;
         color: Theme.text-secondary;
         font-size: Theme.fs-sm;
-        width: 36px;
+        width: 52px;          // fits English "Memory" as well as 中文 "内存"
         vertical-alignment: center;
+        overflow: elide;
     }
 
     // Progress bar
@@ -188,11 +189,11 @@ component NetGraph inherits VerticalLayout {
 
 // --- Sidebar ---------------------------------------------------------------
 // Left-hand panel showing local machine health, mimicking FinalShell's
-// "运行状态" column but kept minimal for the v0.1 baseline.
+// @tr("Status") column but kept minimal for the v0.1 baseline.
 export component Sidebar inherits Rectangle {
-    in property <string> connection-state: "未连接";
+    in property <string> connection-state: @tr("Not connected");
     in property <int> conn-state;                    // 0 gray / 1 green / 2 yellow
-    in property <string> resource-title: "本机资源";
+    in property <string> resource-title: @tr("Local resources");
     in property <float> cpu-percent;
     in property <float> mem-percent;
     in property <float> swap-percent;
@@ -232,7 +233,7 @@ export component Sidebar inherits Rectangle {
                               : Theme.text-muted;
                 }
                 Text {
-                    text: "运行状态";
+                    text: @tr("Status");
                     color: Theme.text-primary;
                     font-size: Theme.fs-md;
                     font-weight: 600;
@@ -264,13 +265,13 @@ export component Sidebar inherits Rectangle {
                 bar-color: Theme.accent;
             }
             StatRow {
-                label: "内存";
+                label: @tr("Memory");
                 percent: root.mem-percent;
                 detail: root.mem-detail;
                 bar-color: Theme.success;
             }
             StatRow {
-                label: "交换";
+                label: @tr("Swap");
                 percent: root.swap-percent;
                 detail: root.swap-detail;
                 bar-color: Theme.warning;
@@ -295,7 +296,7 @@ export component Sidebar inherits Rectangle {
                 iface-selected(i) => { root.select-net-iface(i); }
             }
             Text {
-                text: "本机";
+                text: @tr("Local");
                 color: Theme.text-muted;
                 font-size: Theme.fs-xs;
             }
@@ -317,13 +318,13 @@ export component Sidebar inherits Rectangle {
                 padding-left: 6px;
                 padding-right: 6px;
                 Text {
-                    text: "路径";
+                    text: @tr("Path");
                     color: Theme.text-muted;
                     font-size: Theme.fs-xs;
                     horizontal-stretch: 1;
                 }
                 Text {
-                    text: "可用/大小";
+                    text: @tr("Free/Total");
                     color: Theme.text-muted;
                     font-size: Theme.fs-xs;
                 }
@@ -379,7 +380,7 @@ export component Sidebar inherits Rectangle {
         }
 
         Text {
-            text: "meatshell v0.2.1";
+            text: "meatshell v0.2.3";
             color: Theme.text-muted;
             font-size: Theme.fs-xs;
             horizontal-alignment: center;

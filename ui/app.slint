@@ -62,9 +62,9 @@ export component AppWindow inherits Window {
     background: Theme.bg-root;
 
     // --- Sidebar data ------------------------------------------------------
-    in property <string> connection-state: "未连接";
+    in property <string> connection-state: @tr("Not connected");
     in property <int> conn-state;                       // 0 gray / 1 green / 2 yellow
-    in property <string> resource-title: "本机资源";    // "本机资源" | "服务器资源"
+    in property <string> resource-title: @tr("Local resources");    // @tr("Local resources") | @tr("Server resources")
     in property <float> cpu-percent;
     in property <float> mem-percent;
     in property <float> swap-percent;
@@ -91,10 +91,12 @@ export component AppWindow inherits Window {
     in property <string> download-dir;      // preset SFTP download folder ("" = ask)
     in property <[TransferInfo]> transfers; // download/upload records (newest first)
     in property <[string]> about-libs;      // open-source libraries used
+    in-out property <bool> lang-en: false;  // current UI language (false = 中文)
     in-out property <length> sftp-panel-height: 220px; // shared; lets Rust locate the drop zone
     callback pick-download-dir();            // open a folder picker
     callback open-download-dir();            // reveal the folder in the OS
     callback clear-transfers();              // wipe the transfer history
+    callback set-language(string);           // switch UI language ("zh" / "en")
 
     // --- Session list ------------------------------------------------------
     in property <[SessionInfo]> sessions;
@@ -115,9 +117,12 @@ export component AppWindow inherits Window {
     in-out property <string> dialog-auth: "password";
     in-out property <string> dialog-password;
     in-out property <string> dialog-key-path;
+    in-out property <string> dialog-proxy;
 
     // --- Callbacks up to Rust ---------------------------------------------
     callback new-session-clicked();
+    callback import-ssh-config();             // import hosts from ~/.ssh/config
+    in-out property <string> ssh-import-hint;  // result text shown after import
     callback connect-session(string /* session-id */);
     callback edit-session(string /* session-id */);
     callback remove-session(string /* session-id */);
@@ -220,7 +225,9 @@ export component AppWindow inherits Window {
                 // Welcome tab
                 if root.active-tab-id == "welcome" : Welcome {
                     sessions: root.sessions;
+                    import-hint: root.ssh-import-hint;
                     new-session => { root.new-session-clicked(); }
+                    import-ssh-config => { root.import-ssh-config(); }
                     connect-session(id) => { root.connect-session(id); }
                     edit-session(id) => { root.edit-session(id); }
                     remove-session(id) => { root.remove-session(id); }
@@ -349,7 +356,7 @@ export component AppWindow inherits Window {
 
             HorizontalLayout {
                 Text {
-                    text: "下载设置";
+                    text: @tr("Download settings");
                     color: Theme.text-primary;
                     font-size: Theme.fs-md;
                     font-weight: 600;
@@ -371,7 +378,7 @@ export component AppWindow inherits Window {
             }
 
                 Text {
-                    text: "下载保存到：";
+                    text: @tr("Save downloads to:");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                 }
@@ -385,7 +392,7 @@ export component AppWindow inherits Window {
                         x: 8px;
                         width: parent.width - 16px;
                         height: parent.height;
-                        text: root.download-dir == "" ? "（每次下载时询问）" : root.download-dir;
+                        text: root.download-dir == "" ? @tr("(ask every time)") : root.download-dir;
                         color: root.download-dir == "" ? Theme.text-muted : Theme.text-primary;
                         font-size: Theme.fs-sm;
                         vertical-alignment: center;
@@ -405,7 +412,7 @@ export component AppWindow inherits Window {
                             mouse-cursor: pointer;
                             clicked => { root.pick-download-dir(); }
                         }
-                        Text { text: "选择文件夹"; color: #ffffff; font-size: Theme.fs-sm;
+                        Text { text: @tr("Choose folder"); color: #ffffff; font-size: Theme.fs-sm;
                                horizontal-alignment: center; vertical-alignment: center; }
                     }
                     Rectangle {
@@ -416,7 +423,7 @@ export component AppWindow inherits Window {
                             mouse-cursor: pointer;
                             clicked => { root.open-download-dir(); }
                         }
-                        Text { text: "打开目录"; color: Theme.text-primary; font-size: Theme.fs-sm;
+                        Text { text: @tr("Open folder"); color: Theme.text-primary; font-size: Theme.fs-sm;
                                horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
@@ -426,7 +433,7 @@ export component AppWindow inherits Window {
                 // Transfer records (download/upload progress + history).
                 HorizontalLayout {
                     Text {
-                        text: "传输记录";
+                        text: @tr("Transfers");
                         color: Theme.text-secondary;
                         font-size: Theme.fs-sm;
                         horizontal-stretch: 1;
@@ -440,7 +447,7 @@ export component AppWindow inherits Window {
                             mouse-cursor: pointer;
                             clicked => { root.clear-transfers(); }
                         }
-                        Text { text: "清空"; color: Theme.text-muted; font-size: Theme.fs-xs;
+                        Text { text: @tr("Clear"); color: Theme.text-muted; font-size: Theme.fs-xs;
                                horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
@@ -454,7 +461,7 @@ export component AppWindow inherits Window {
                         spacing: 4px;
 
                         if root.transfers.length == 0 : Text {
-                            text: "暂无传输记录";
+                            text: @tr("No transfers yet");
                             color: Theme.text-muted;
                             font-size: Theme.fs-xs;
                         }
@@ -509,10 +516,10 @@ export component AppWindow inherits Window {
 
     // --- Settings menu popup (top-right) ----------------------------------
     Rectangle {
-        x: parent.width - 158px;
+        x: parent.width - 196px;
         y: 40px;
-        width: 144px;
-        height: 44px;
+        width: 198px;
+        height: 104px;
         visible: root.settings-open;
         background: Theme.bg-panel;
         border-radius: Theme.radius-md;
@@ -525,6 +532,50 @@ export component AppWindow inherits Window {
 
         VerticalLayout {
             padding: 4px;
+            spacing: 1px;
+            // Import hosts from ~/.ssh/config.
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: import-ta.has-hover ? Theme.bg-hover : transparent;
+                import-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.settings-open = false;
+                        root.import-ssh-config();
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 8px; spacing: 8px;
+                    Text { text: "\u{E890}"; font-family: "Material Icons"; // input/import
+                           color: Theme.text-secondary; font-size: Theme.fs-sm;
+                           vertical-alignment: center; }
+                    Text { text: @tr("Import ~/.ssh/config"); color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            // Language toggle: shows the language you'll switch TO.
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: lang-ta.has-hover ? Theme.bg-hover : transparent;
+                lang-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.settings-open = false;
+                        root.set-language(root.lang-en ? "zh" : "en");
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 8px; spacing: 8px;
+                    Text { text: "\u{E894}"; font-family: "Material Icons"; // language/translate
+                           color: Theme.text-secondary; font-size: Theme.fs-sm;
+                           vertical-alignment: center; }
+                    Text { text: root.lang-en ? "切换到中文" : "Switch to English";
+                           color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
             Rectangle {
                 height: 28px;
                 border-radius: Theme.radius-sm;
@@ -541,7 +592,7 @@ export component AppWindow inherits Window {
                     Text { text: "\u{E88E}"; font-family: "Material Icons"; // Info
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            vertical-alignment: center; }
-                    Text { text: "关于"; color: Theme.text-primary; font-size: Theme.fs-md;
+                    Text { text: @tr("About"); color: Theme.text-primary; font-size: Theme.fs-md;
                            vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -577,7 +628,7 @@ export component AppWindow inherits Window {
 
                 HorizontalLayout {
                     Text {
-                        text: "关于 meatshell";
+                        text: @tr("About meatshell");
                         color: Theme.text-primary;
                         font-size: Theme.fs-lg;
                         font-weight: 700;
@@ -599,13 +650,13 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "一个由「一坨肉」开发的轻量 Rust + Slint SSH 终端客户端。";
+                    text: @tr("A lightweight Rust + Slint SSH terminal client by 'lil meatball'.");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                     wrap: word-wrap;
                 }
                 Text {
-                    text: "开源项目 · 协议 MIT / Apache-2.0";
+                    text: @tr("Open source · MIT / Apache-2.0");
                     color: Theme.text-muted;
                     font-size: Theme.fs-xs;
                 }
@@ -613,7 +664,7 @@ export component AppWindow inherits Window {
                 Rectangle { height: 1px; background: Theme.border-subtle; }
 
                 Text {
-                    text: "使用的开源库";
+                    text: @tr("Open-source libraries used");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                 }
@@ -652,6 +703,7 @@ export component AppWindow inherits Window {
         draft-auth <=> root.dialog-auth;
         draft-password <=> root.dialog-password;
         draft-key-path <=> root.dialog-key-path;
+        draft-proxy <=> root.dialog-proxy;
         submit(draft) => { root.session-dialog-submit(draft); }
         cancel => { root.session-dialog-cancel(); }
         pick-key-file => { root.session-dialog-pick-key(); }

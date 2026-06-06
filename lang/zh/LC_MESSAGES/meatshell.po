@@ -1,0 +1,193 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: meatshell\n"
+"Language: zh\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Not connected"
+msgstr "未连接"
+
+msgid "Local resources"
+msgstr "本机资源"
+
+msgid "Server resources"
+msgstr "服务器资源"
+
+msgid "Download settings"
+msgstr "下载设置"
+
+msgid "Save downloads to:"
+msgstr "下载保存到："
+
+msgid "(ask every time)"
+msgstr "（每次下载时询问）"
+
+msgid "Choose folder"
+msgstr "选择文件夹"
+
+msgid "Open folder"
+msgstr "打开目录"
+
+msgid "Transfers"
+msgstr "传输记录"
+
+msgid "Clear"
+msgstr "清空"
+
+msgid "No transfers yet"
+msgstr "暂无传输记录"
+
+msgid "About"
+msgstr "关于"
+
+msgid "About meatshell"
+msgstr "关于 meatshell"
+
+msgid "A lightweight Rust + Slint SSH terminal client by 'lil meatball'."
+msgstr "一个由「一坨肉」开发的轻量 Rust + Slint SSH 终端客户端。"
+
+msgid "Open source · MIT / Apache-2.0"
+msgstr "开源项目 · 协议 MIT / Apache-2.0"
+
+msgid "Open-source libraries used"
+msgstr "使用的开源库"
+
+msgid "Edit session"
+msgstr "编辑会话"
+
+msgid "New session"
+msgstr "新建会话"
+
+msgid "Name"
+msgstr "名称"
+
+msgid "e.g. production web-01"
+msgstr "例如：生产环境 web-01"
+
+msgid "Host / IP"
+msgstr "主机 / IP"
+
+msgid "Port"
+msgstr "端口"
+
+msgid "Username"
+msgstr "用户名"
+
+msgid "Authentication"
+msgstr "认证方式"
+
+msgid "Password"
+msgstr "密码"
+
+msgid "Private key"
+msgstr "私钥"
+
+msgid "Leave blank to keep the current password"
+msgstr "留空则不修改密码"
+
+msgid "Private key file"
+msgstr "私钥文件"
+
+msgid "Browse…"
+msgstr "浏览…"
+
+msgid "Pick the private key itself (not the .pub public key)"
+msgstr "选择私钥本身（不是 .pub 公钥文件）"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Create"
+msgstr "创建"
+
+msgid "SFTP not connected"
+msgstr "SFTP 未连接"
+
+msgid "Upload"
+msgstr "上传"
+
+msgid "Directory tree"
+msgstr "目录树"
+
+msgid "Size"
+msgstr "大小"
+
+msgid "Modified"
+msgstr "修改时间"
+
+msgid "Loading..."
+msgstr "加载中..."
+
+msgid "Empty directory"
+msgstr "目录为空"
+
+msgid "Download"
+msgstr "下载"
+
+msgid "View"
+msgstr "查看"
+
+msgid "Edit"
+msgstr "编辑"
+
+msgid "Delete"
+msgstr "删除"
+
+msgid "Status"
+msgstr "运行状态"
+
+msgid "Memory"
+msgstr "内存"
+
+msgid "Swap"
+msgstr "交换"
+
+msgid "Local"
+msgstr "本机"
+
+msgid "Path"
+msgstr "路径"
+
+msgid "Free/Total"
+msgstr "可用/大小"
+
+msgid "Copy"
+msgstr "复制"
+
+msgid "Paste"
+msgstr "粘贴"
+
+msgid "Clear buffer"
+msgstr "清空缓存"
+
+msgid "Find"
+msgstr "查找"
+
+msgid "meatshell — a lightweight Rust + Slint SSH client by 'lil meatball'"
+msgstr "meatshell 一个由「一坨肉」开发的轻量 Rust + Slint SSH 客户端"
+
+msgid "Quick connect"
+msgstr "快速连接"
+
+msgid "+ New session"
+msgstr "+ 新建会话"
+
+msgid "No sessions yet"
+msgstr "尚无会话"
+
+msgid "Use 'New session' (top-right) to add your first server"
+msgstr "点击右上角 “新建会话” 添加你的第一台服务器"
+
+msgid "Import ~/.ssh/config"
+msgstr "导入 ~/.ssh/config"
+
+msgid "Proxy (optional)"
+msgstr "代理（可选）"
+
+msgid "Leave blank to use $ALL_PROXY or connect directly"
+msgstr "留空则用 $ALL_PROXY 环境变量，或直接连接"

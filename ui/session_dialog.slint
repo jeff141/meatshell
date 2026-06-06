@@ -10,6 +10,7 @@ export struct SessionDraft {
     auth: string,      // "password" | "key"
     password: string,
     private-key-path: string,
+    proxy: string,     // "" | "socks5://host:port" | "http://host:port"
 }
 
 // Modal dialog for creating / editing an SSH session.
@@ -26,6 +27,7 @@ export component SessionDialog inherits Rectangle {
     in-out property <string> draft-auth: "password";
     in-out property <string> draft-password;
     in-out property <string> draft-key-path;
+    in-out property <string> draft-proxy;
 
     callback submit(SessionDraft);
     callback cancel();
@@ -42,7 +44,7 @@ export component SessionDialog inherits Rectangle {
 
     Rectangle {
         width: 420px;
-        height: 460px;
+        height: 520px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.bg-panel;
@@ -62,28 +64,28 @@ export component SessionDialog inherits Rectangle {
             spacing: 14px;
 
             Text {
-                text: is-editing ? "编辑会话" : "新建会话";
+                text: is-editing ? @tr("Edit session") : @tr("New session");
                 color: Theme.text-primary;
                 font-size: Theme.fs-xl;
                 font-weight: 600;
             }
 
             LabeledInput {
-                label: "名称";
-                placeholder: "例如：生产环境 web-01";
+                label: @tr("Name");
+                placeholder: @tr("e.g. production web-01");
                 value <=> root.draft-name;
             }
 
             HorizontalLayout {
                 spacing: 10px;
                 LabeledInput {
-                    label: "主机 / IP";
+                    label: @tr("Host / IP");
                     placeholder: "192.168.1.10";
                     value <=> root.draft-host;
                     horizontal-stretch: 2;
                 }
                 LabeledInput {
-                    label: "端口";
+                    label: @tr("Port");
                     placeholder: "22";
                     value <=> root.draft-port;
                     horizontal-stretch: 1;
@@ -91,7 +93,7 @@ export component SessionDialog inherits Rectangle {
             }
 
             LabeledInput {
-                label: "用户名";
+                label: @tr("Username");
                 placeholder: "root";
                 value <=> root.draft-user;
             }
@@ -100,7 +102,7 @@ export component SessionDialog inherits Rectangle {
             VerticalLayout {
                 spacing: 4px;
                 Text {
-                    text: "认证方式";
+                    text: @tr("Authentication");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                 }
@@ -114,7 +116,7 @@ export component SessionDialog inherits Rectangle {
                         background: root.draft-auth == "password" ? Theme.accent : Theme.bg-root;
                         border-color: root.draft-auth == "password" ? Theme.accent : Theme.border-subtle;
                         Text {
-                            text: "密码";
+                            text: @tr("Password");
                             color: root.draft-auth == "password" ? white : Theme.text-primary;
                             font-size: Theme.fs-md;
                             horizontal-alignment: center;
@@ -133,7 +135,7 @@ export component SessionDialog inherits Rectangle {
                         background: root.draft-auth == "key" ? Theme.accent : Theme.bg-root;
                         border-color: root.draft-auth == "key" ? Theme.accent : Theme.border-subtle;
                         Text {
-                            text: "私钥";
+                            text: @tr("Private key");
                             color: root.draft-auth == "key" ? white : Theme.text-primary;
                             font-size: Theme.fs-md;
                             horizontal-alignment: center;
@@ -148,8 +150,8 @@ export component SessionDialog inherits Rectangle {
             }
 
             if root.draft-auth == "password" : LabeledInput {
-                label: "密码";
-                placeholder: "••••••••";
+                label: @tr("Password");
+                placeholder: root.is-editing ? @tr("Leave blank to keep the current password") : "••••••••";
                 password: true;
                 value <=> root.draft-password;
             }
@@ -157,7 +159,7 @@ export component SessionDialog inherits Rectangle {
             if root.draft-auth == "key" : VerticalLayout {
                 spacing: 4px;
                 Text {
-                    text: "私钥文件";
+                    text: @tr("Private key file");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                 }
@@ -196,7 +198,7 @@ export component SessionDialog inherits Rectangle {
                         border-color: Theme.border-subtle;
                         background: browse-ta.has-hover ? Theme.bg-hover : Theme.bg-elevated;
                         Text {
-                            text: "浏览…";
+                            text: @tr("Browse…");
                             color: Theme.text-primary;
                             font-size: Theme.fs-sm;
                             horizontal-alignment: center;
@@ -209,7 +211,22 @@ export component SessionDialog inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "选择私钥本身（不是 .pub 公钥文件）";
+                    text: @tr("Pick the private key itself (not the .pub public key)");
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                }
+            }
+
+            // Optional outbound proxy (SOCKS5 / HTTP) for restricted networks.
+            VerticalLayout {
+                spacing: 4px;
+                LabeledInput {
+                    label: @tr("Proxy (optional)");
+                    placeholder: "socks5://127.0.0.1:1080";
+                    value <=> root.draft-proxy;
+                }
+                Text {
+                    text: @tr("Leave blank to use $ALL_PROXY or connect directly");
                     color: Theme.text-muted;
                     font-size: Theme.fs-xs;
                 }
@@ -221,11 +238,11 @@ export component SessionDialog inherits Rectangle {
                 alignment: end;
                 spacing: 8px;
                 GhostButton {
-                    text: "取消";
+                    text: @tr("Cancel");
                     clicked => { root.cancel(); }
                 }
                 PrimaryButton {
-                    text: is-editing ? "保存" : "创建";
+                    text: is-editing ? @tr("Save") : @tr("Create");
                     clicked => {
                         root.submit({
                             id: root.draft-id,
@@ -236,6 +253,7 @@ export component SessionDialog inherits Rectangle {
                             auth: root.draft-auth,
                             password: root.draft-password,
                             private-key-path: root.draft-key-path,
+                            proxy: root.draft-proxy,
                         });
                     }
                 }

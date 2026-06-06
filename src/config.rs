@@ -13,6 +13,52 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use zeroize::Zeroize;
+
+/// A secret string (e.g. a session password) whose heap buffer is zeroed when
+/// it is dropped, so plaintext credentials don't survive in freed memory and
+/// turn up in core dumps, a debugger, or `/proc/<pid>/mem`.  `Clone` makes an
+/// independent copy that is likewise zeroed on its own drop, and `Debug` is
+/// redacted so a password can never be logged by accident.
+#[derive(Clone, Default)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(s: impl Into<String>) -> Self {
+        Secret(s.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never reveal the contents in logs / debug output.
+        f.write_str(if self.0.is_empty() { "Secret(\"\")" } else { "Secret(***)" })
+    }
+}
+
+impl Serialize for Secret {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Secret(String::deserialize(d)?))
+    }
+}
 
 /// How a session authenticates.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,9 +94,13 @@ pub struct Session {
     pub user: String,
     pub auth: AuthMethod,
     #[serde(default)]
-    pub password: String,
+    pub password: Secret,
     #[serde(default)]
     pub private_key_path: String,
+    /// Optional outbound proxy, e.g. "socks5://127.0.0.1:1080" or
+    /// "http://user:pass@host:8080". Empty = use $ALL_PROXY, else direct.
+    #[serde(default)]
+    pub proxy: String,
     #[serde(default)]
     pub last_used: Option<String>,
 }
@@ -64,8 +114,9 @@ impl Session {
             port: 22,
             user: "root".into(),
             auth: AuthMethod::Password,
-            password: String::new(),
+            password: Secret::default(),
             private_key_path: String::new(),
+            proxy: String::new(),
             last_used: None,
         }
     }
@@ -79,6 +130,9 @@ pub struct ConfigFile {
     /// Preset SFTP download directory. Empty = ask each time.
     #[serde(default)]
     pub download_dir: String,
+    /// UI language code: "zh" (default) or "en".
+    #[serde(default)]
+    pub language: String,
 }
 
 pub struct ConfigStore {
@@ -162,6 +216,19 @@ impl ConfigStore {
 
     pub fn set_download_dir(&mut self, dir: String) {
         self.cache.download_dir = dir;
+    }
+
+    /// UI language code ("zh" default / "en").
+    pub fn language(&self) -> &str {
+        if self.cache.language.is_empty() {
+            "zh"
+        } else {
+            &self.cache.language
+        }
+    }
+
+    pub fn set_language(&mut self, lang: String) {
+        self.cache.language = lang;
     }
 
     pub fn save(&self) -> Result<()> {

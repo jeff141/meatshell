@@ -21,12 +21,15 @@ use russh::client::{self, Handler};
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh::keys::load_secret_key;
 use russh::Disconnect;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{RawSftpSession, SftpSession};
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
+use futures::stream::{FuturesUnordered, StreamExt};
 use ssh_key::{HashAlg, PublicKey};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
 use crate::config::{AuthMethod, Session};
+use crate::i18n::t;
 use crate::ssh::{format_mtime, format_size, RemoteEntry, RemoteTreeNode, SessionEvent};
 
 // ---------------------------------------------------------------------------
@@ -108,7 +111,7 @@ pub fn spawn_sftp(
     let events_err = events.clone();
     let join = runtime.spawn(async move {
         if let Err(err) = run_sftp(session, cmd_rx, self_tx, events).await {
-            let _ = events_err.send(SessionEvent::SftpStatus(format!("SFTP 错误: {err:#}")));
+            let _ = events_err.send(SessionEvent::SftpStatus(format!("{}: {err:#}", t("SFTP 错误", "SFTP error"))));
         }
     });
     SftpHandle {
@@ -167,7 +170,7 @@ async fn run_sftp(
     self_tx: UnboundedSender<SftpCommand>,
     events: UnboundedSender<SessionEvent>,
 ) -> Result<()> {
-    let _ = events.send(SessionEvent::SftpStatus("SFTP 连接中...".into()));
+    let _ = events.send(SessionEvent::SftpStatus(t("SFTP 连接中...", "SFTP connecting...").into()));
 
     // Open a dedicated SSH connection for SFTP.
     let config = Arc::new(client::Config {
@@ -176,20 +179,31 @@ async fn run_sftp(
     });
 
     let addr = format!("{}:{}", session.host, session.port);
-    let mut handle = client::connect(config, addr.as_str(), SftpClientHandler)
-        .await
-        .with_context(|| format!("sftp connect {} failed", addr))?;
+    // Tunnel through the same proxy as the shell session, if configured.
+    let mut handle = match crate::proxy::resolve(&session.proxy) {
+        Some(p) => {
+            let stream = crate::proxy::connect(&p, &session.host, session.port)
+                .await
+                .with_context(|| format!("sftp proxy connect {} failed", addr))?;
+            client::connect_stream(config, stream, SftpClientHandler)
+                .await
+                .with_context(|| format!("sftp connect {} failed", addr))?
+        }
+        None => client::connect(config, addr.as_str(), SftpClientHandler)
+            .await
+            .with_context(|| format!("sftp connect {} failed", addr))?,
+    };
 
     // --- Authenticate (same method as the shell session) -------------------
     let authed = match session.auth {
         AuthMethod::Password => handle
-            .authenticate_password(&session.user, &session.password)
+            .authenticate_password(&session.user, session.password.as_str())
             .await
             .context("sftp password auth failed")?,
         AuthMethod::Key => {
             let raw = session.private_key_path.trim();
             if raw.is_empty() {
-                return Err(anyhow!("私钥路径为空"));
+                return Err(anyhow!(t("私钥路径为空", "private key path is empty")));
             }
             let normalised = raw.replace('\\', "/");
             let key_path = normalised
@@ -213,7 +227,7 @@ async fn run_sftp(
     };
 
     if !authed {
-        return Err(anyhow!("SFTP 认证失败"));
+        return Err(anyhow!(t("SFTP 认证失败", "SFTP authentication failed")));
     }
 
     // --- Open the sftp subsystem channel -----------------------------------
@@ -234,7 +248,7 @@ async fn run_sftp(
         .canonicalize(".")
         .await
         .unwrap_or_else(|_| "/".to_string());
-    let _ = events.send(SessionEvent::SftpStatus(format!("SFTP 加载 {}...", home)));
+    let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("SFTP 加载", "SFTP loading"), home)));
     match list_dir_impl(&sftp, &home).await {
         Ok(entries) => {
             let _ = events.send(SessionEvent::SftpEntries {
@@ -244,7 +258,7 @@ async fn run_sftp(
             let _ = events.send(SessionEvent::SftpStatus(home.clone()));
         }
         Err(e) => {
-            let _ = events.send(SessionEvent::SftpStatus(format!("SFTP 错误: {e}")));
+            let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("SFTP 错误", "SFTP error"))));
         }
     }
 
@@ -294,7 +308,7 @@ async fn run_sftp(
             SftpCommand::Close => break,
 
             SftpCommand::ListDir(path) => {
-                let _ = events.send(SessionEvent::SftpStatus(format!("加载 {}...", path)));
+                let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("加载", "Loading"), path)));
                 match list_dir_impl(&sftp, &path).await {
                     Ok(entries) => {
                         let _ = events.send(SessionEvent::SftpEntries {
@@ -304,7 +318,7 @@ async fn run_sftp(
                         let _ = events.send(SessionEvent::SftpStatus(path));
                     }
                     Err(e) => {
-                        let _ = events.send(SessionEvent::SftpStatus(format!("列目录失败: {e}")));
+                        let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("列目录失败", "list directory failed"))));
                     }
                 }
             }
@@ -331,15 +345,15 @@ async fn run_sftp(
                 let filename = base_name(&remote);
                 let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), filename);
                 let id = Uuid::new_v4().to_string();
-                let _ = events.send(SessionEvent::SftpStatus(format!("下载 {}...", filename)));
+                let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("下载", "Downloading"), filename)));
                 match download_impl(&sftp, &remote, &local_path, &filename, &id, &events).await {
                     Ok(_) => {
                         let _ = events
-                            .send(SessionEvent::SftpStatus(format!("下载完成: {}", filename)));
+                            .send(SessionEvent::SftpStatus(format!("{}: {}", t("下载完成", "Downloaded"), filename)));
                     }
                     Err(e) => {
                         emit_transfer(&events, &id, &filename, false, 0, 0, 2);
-                        let _ = events.send(SessionEvent::SftpStatus(format!("下载失败: {e}")));
+                        let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("下载失败", "Download failed"))));
                     }
                 }
             }
@@ -348,8 +362,8 @@ async fn run_sftp(
                 let filename = base_name(&local);
                 let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), filename);
                 let id = Uuid::new_v4().to_string();
-                let _ = events.send(SessionEvent::SftpStatus(format!("上传 {}...", filename)));
-                match upload_impl(&sftp, &local, &remote_path, &filename, &id, &events).await {
+                let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("上传", "Uploading"), filename)));
+                match upload_pipelined(&handle, &local, &remote_path, &filename, &id, &events).await {
                     Ok(_) => {
                         if let Ok(entries) = list_dir_impl(&sftp, &remote_dir).await {
                             let _ = events.send(SessionEvent::SftpEntries {
@@ -358,18 +372,18 @@ async fn run_sftp(
                             });
                         }
                         let _ = events
-                            .send(SessionEvent::SftpStatus(format!("上传完成: {}", filename)));
+                            .send(SessionEvent::SftpStatus(format!("{}: {}", t("上传完成", "Uploaded"), filename)));
                     }
                     Err(e) => {
                         emit_transfer(&events, &id, &filename, true, 0, 0, 2);
-                        let _ = events.send(SessionEvent::SftpStatus(format!("上传失败: {e}")));
+                        let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("上传失败", "Upload failed"))));
                     }
                 }
             }
 
             SftpCommand::Delete(path) => {
                 let filename = base_name(&path);
-                let _ = events.send(SessionEvent::SftpStatus(format!("删除 {}...", filename)));
+                let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("删除", "Deleting"), filename)));
                 // Try as a file first, then as an (empty) directory.
                 let res = match sftp.remove_file(&path).await {
                     Ok(_) => Ok(()),
@@ -385,28 +399,30 @@ async fn run_sftp(
                             });
                         }
                         let _ =
-                            events.send(SessionEvent::SftpStatus(format!("已删除: {}", filename)));
+                            events.send(SessionEvent::SftpStatus(format!("{}: {}", t("已删除", "Deleted"), filename)));
                     }
                     Err(e) => {
-                        let _ = events.send(SessionEvent::SftpStatus(format!("删除失败: {e}")));
+                        let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("删除失败", "Delete failed"))));
                     }
                 }
             }
 
             SftpCommand::OpenTemp { remote, edit } => {
-                let filename = base_name(&remote);
+                // Sanitize the remote-controlled name before it becomes a local
+                // file path that we later hand to the OS "open" call.
+                let filename = sanitize_filename(&base_name(&remote));
                 let tmp_dir = std::env::temp_dir().join("meatshell");
                 let _ = tokio::fs::create_dir_all(&tmp_dir).await;
                 let local = tmp_dir.join(&filename);
                 let local_str = local.to_string_lossy().to_string();
-                let _ = events.send(SessionEvent::SftpStatus(format!("打开 {}...", filename)));
+                let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("打开", "Opening"), filename)));
                 let xid = Uuid::new_v4().to_string();
                 match download_impl(&sftp, &remote, &local_str, &filename, &xid, &events).await {
                     Ok(_) => {
                         open_with_os(&local_str);
                         let _ = events.send(SessionEvent::SftpStatus(format!(
-                            "已{}: {}",
-                            if edit { "打开编辑" } else { "打开" },
+                            "{}: {}",
+                            if edit { t("已打开编辑", "Opened for editing") } else { t("已打开", "Opened") },
                             filename
                         )));
                         if edit {
@@ -420,7 +436,7 @@ async fn run_sftp(
                         }
                     }
                     Err(e) => {
-                        let _ = events.send(SessionEvent::SftpStatus(format!("打开失败: {e}")));
+                        let _ = events.send(SessionEvent::SftpStatus(format!("{}: {e}", t("打开失败", "Open failed"))));
                     }
                 }
             }
@@ -455,16 +471,72 @@ fn parent_dir(path: &str) -> String {
 }
 
 /// Open a local file with the OS default application.
+///
+/// Security: we must NOT route the path through a shell.  The previous
+/// `cmd /C start "" <path>` let cmd.exe re-parse the path, so a remote file name
+/// containing shell metacharacters (`&` `|` `>` `<` `^` …) — e.g. `foo&calc.exe`
+/// — could inject and run arbitrary commands when the user opened it.  We call
+/// `ShellExecuteW` directly instead: it treats the path as one opaque string, so
+/// no shell parsing happens.  (`xdg-open` on Unix already takes a single argv
+/// argument and never invokes a shell.)
+#[cfg(windows)]
 fn open_with_os(path: &str) {
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", path])
-            .spawn();
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show_cmd: i32,
+        ) -> isize;
     }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    let to_wide = |s: &str| -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let op = to_wide("open");
+    let file = to_wide(path);
+    unsafe {
+        ShellExecuteW(
+            0,
+            op.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1, // SW_SHOWNORMAL
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn open_with_os(path: &str) {
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+}
+
+/// Make a remote-supplied file name safe to use as a *local* temp file name:
+/// drops path separators (defence-in-depth against traversal) and replaces
+/// characters that are invalid on Windows or special to shells with `_`.
+/// Normal names (letters, digits, `.`, `-`, `_`, spaces, Unicode) pass through
+/// unchanged.  Falls back to `file` when nothing usable remains.
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*' | '&' | '^' | '%' | '!'
+            | '`' | '$' | '\'' => '_',
+            c if (c as u32) < 0x20 => '_',
+            c => c,
+        })
+        .collect();
+    // Windows strips trailing dots/spaces; do it ourselves to avoid surprises.
+    let trimmed = cleaned.trim_end_matches([' ', '.']);
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -497,7 +569,8 @@ fn spawn_edit_watcher(
                     remote_dir: remote_dir.clone(),
                 });
                 let _ = events.send(SessionEvent::SftpStatus(format!(
-                    "已上传修改: {}",
+                    "{}: {}",
+                    t("已上传修改", "Re-uploaded changes"),
                     filename
                 )));
             }
@@ -632,15 +705,28 @@ async fn download_impl(
     Ok(())
 }
 
-async fn upload_impl(
-    sftp: &SftpSession,
+/// Pipelined SFTP upload (#16).
+///
+/// The high-level `SftpSession`/`File` writes one chunk and waits for the
+/// server's ack before sending the next, so throughput is capped by the
+/// round-trip time (~15x slower than scp on a latent link).  Here we open a
+/// dedicated raw SFTP channel and keep many WRITE requests in flight at once
+/// (each tagged with its absolute offset, so out-of-order completion is fine),
+/// which hides the latency and brings us within a single order of magnitude of
+/// native scp.
+async fn upload_pipelined(
+    handle: &client::Handle<SftpClientHandler>,
     local: &str,
     remote: &str,
     name: &str,
     id: &str,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncReadExt;
+
+    const CHUNK: usize = 32 * 1024; // safe SFTP write size
+    const MAX_INFLIGHT: usize = 32; // ~1 MB of outstanding writes hides the RTT
+
     let total = tokio::fs::metadata(local)
         .await
         .map(|m| m.len())
@@ -648,31 +734,84 @@ async fn upload_impl(
     let mut local_file = tokio::fs::File::open(local)
         .await
         .with_context(|| format!("open local {local}"))?;
-    let mut remote_file = sftp
-        .create(remote)
+
+    // Dedicated raw SFTP channel for the transfer (keeps the browse session
+    // responsive and lets us issue concurrent WRITE requests).
+    let channel = handle
+        .channel_open_session()
         .await
-        .with_context(|| format!("create remote {remote}"))?;
+        .context("open sftp upload channel")?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .context("request sftp subsystem")?;
+    let raw = Arc::new(RawSftpSession::new(channel.into_stream()));
+    raw.init().await.context("sftp upload handshake")?;
+
+    let fhandle = raw
+        .open(
+            remote,
+            OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+            FileAttributes::default(),
+        )
+        .await
+        .with_context(|| format!("create remote {remote}"))?
+        .handle;
 
     emit_transfer(events, id, name, true, 0, total, 0);
-    let mut buf = vec![0u8; XFER_CHUNK];
+
+    let mut offset: u64 = 0;
     let mut done: u64 = 0;
     let mut last = Instant::now();
-    loop {
-        let n = local_file.read(&mut buf).await.context("read local file")?;
-        if n == 0 {
+    let mut eof = false;
+    let mut err: Option<anyhow::Error> = None;
+    let mut inflight = FuturesUnordered::new();
+
+    while !eof || !inflight.is_empty() {
+        // Top up the pipeline with fresh WRITE requests.
+        while !eof && inflight.len() < MAX_INFLIGHT {
+            let mut buf = vec![0u8; CHUNK];
+            match local_file.read(&mut buf).await {
+                Ok(0) => eof = true,
+                Ok(n) => {
+                    buf.truncate(n);
+                    let off = offset;
+                    offset += n as u64;
+                    let raw2 = raw.clone();
+                    let h = fhandle.clone();
+                    inflight.push(async move {
+                        raw2.write(h, off, buf).await.map(|_| n as u64)
+                    });
+                }
+                Err(e) => {
+                    err = Some(anyhow!("read local file: {e}"));
+                    eof = true;
+                }
+            }
+        }
+        match inflight.next().await {
+            Some(Ok(n)) => {
+                done += n;
+                if last.elapsed() >= Duration::from_millis(150) {
+                    last = Instant::now();
+                    emit_transfer(events, id, name, true, done, total, 0);
+                }
+            }
+            Some(Err(e)) => {
+                err = Some(anyhow!("write remote file: {e}"));
+                eof = true; // stop reading more
+            }
+            None => {}
+        }
+        if err.is_some() {
             break;
         }
-        remote_file
-            .write_all(&buf[..n])
-            .await
-            .context("write remote file")?;
-        done += n as u64;
-        if last.elapsed() >= Duration::from_millis(150) {
-            last = Instant::now();
-            emit_transfer(events, id, name, true, done, total, 0);
-        }
     }
-    remote_file.flush().await.context("flush remote file")?;
+
+    let _ = raw.close(fhandle).await;
+    if let Some(e) = err {
+        return Err(e);
+    }
     emit_transfer(events, id, name, true, done, total.max(done), 1);
     Ok(())
 }

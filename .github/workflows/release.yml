@@ -1,0 +1,103 @@
+name: Release
+
+# Build native binaries for Windows / Linux / macOS.
+#  - Push a tag like `v0.2.3`  -> builds all platforms and attaches the archives
+#    to a GitHub Release.
+#  - Run manually (workflow_dispatch) -> builds all platforms and uploads them as
+#    downloadable workflow artifacts (no release created).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create / update the GitHub Release
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+            bin: meatshell.exe
+          - os: ubuntu-22.04            # build on the oldest supported runner for
+            target: x86_64-unknown-linux-gnu   # broader glibc compatibility
+            name: linux-x86_64
+            bin: meatshell
+          - os: macos-14               # Apple Silicon
+            target: aarch64-apple-darwin
+            name: macos-aarch64
+            bin: meatshell
+          - os: macos-13               # Intel
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+            bin: meatshell
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Slint (winit + femtovg) + rfd (GTK) + arboard need these system libs.
+      # Build-time only — no GPU/display required to compile.
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake \
+            libfontconfig1-dev libfreetype6-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgtk-3-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          STAGE="meatshell-${VERSION}-${{ matrix.name }}"
+          mkdir "$STAGE"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGE/"
+          cp README.md README.en.md CHANGELOG.md "$STAGE/" 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Ship the desktop entry + installer + icon so the dock shows the icon.
+            cp assets/meatshell.desktop assets/install-linux.sh assets/icon@512.png "$STAGE/" 2>/dev/null || true
+          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "${STAGE}.zip" "$STAGE" >/dev/null
+            echo "ASSET=${STAGE}.zip" >> "$GITHUB_ENV"
+          else
+            tar -czf "${STAGE}.tar.gz" "$STAGE"
+            echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          fail_on_unmatched_files: true

@@ -51,7 +51,7 @@ export component SftpPanel inherits Rectangle {
     // --- Properties --------------------------------------------------------
     in property <string>  current-path: "/";
     in property <[SftpEntry]>    entries;
-    in property <string>  status: "SFTP 未连接";
+    in property <string>  status: @tr("SFTP not connected");
     in property <bool>    loading: false;
     in property <[SftpTreeNode]> tree-nodes: [];
 
@@ -111,7 +111,7 @@ export component SftpPanel inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => { root.upload-clicked(root.current-path); }
                     }
-                    Text { text: "上传"; color: #ffffff; font-size: Theme.fs-sm;
+                    Text { text: @tr("Upload"); color: #ffffff; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
                 }
 
@@ -146,7 +146,7 @@ export component SftpPanel inherits Rectangle {
                     background: Theme.bg-root;
                     Text {
                         x: 8px;
-                        text: "目录树";
+                        text: @tr("Directory tree");
                         color: Theme.text-muted;
                         font-size: Theme.fs-xs;
                         vertical-alignment: center;
@@ -225,11 +225,11 @@ export component SftpPanel inherits Rectangle {
                     background: Theme.bg-root;
                     HorizontalLayout {
                         padding-left: 8px; padding-right: 8px;
-                        Text { text: "名称"; color: Theme.text-muted; font-size: Theme.fs-xs;
+                        Text { text: @tr("Name"); color: Theme.text-muted; font-size: Theme.fs-xs;
                                horizontal-stretch: 1; vertical-alignment: center; }
-                        Text { text: "大小"; color: Theme.text-muted; font-size: Theme.fs-xs;
+                        Text { text: @tr("Size"); color: Theme.text-muted; font-size: Theme.fs-xs;
                                width: 72px; horizontal-alignment: right; vertical-alignment: center; }
-                        Text { text: "修改时间"; color: Theme.text-muted; font-size: Theme.fs-xs;
+                        Text { text: @tr("Modified"); color: Theme.text-muted; font-size: Theme.fs-xs;
                                width: 116px; horizontal-alignment: right; vertical-alignment: center; }
                     }
                 }
@@ -244,13 +244,13 @@ export component SftpPanel inherits Rectangle {
 
                         if root.loading : Rectangle {
                             height: 40px;
-                            Text { text: "加载中..."; color: Theme.text-muted; font-size: Theme.fs-sm;
+                            Text { text: @tr("Loading..."); color: Theme.text-muted; font-size: Theme.fs-sm;
                                    horizontal-alignment: center; vertical-alignment: center; }
                         }
 
                         if !root.loading && root.entries.length == 0 : Rectangle {
                             height: 40px;
-                            Text { text: "目录为空"; color: Theme.text-muted; font-size: Theme.fs-sm;
+                            Text { text: @tr("Empty directory"); color: Theme.text-muted; font-size: Theme.fs-sm;
                                    horizontal-alignment: center; vertical-alignment: center; }
                         }
 
@@ -300,19 +300,19 @@ export component SftpPanel inherits Rectangle {
                                         padding: 4px;
                                         spacing: 1px;
                                         if !entry.is-dir : SftpMenuItem {
-                                            label: "下载";
+                                            label: @tr("Download");
                                             clicked => { root.download(entry.full-path); }
                                         }
                                         if !entry.is-dir : SftpMenuItem {
-                                            label: "查看";
+                                            label: @tr("View");
                                             clicked => { root.view(entry.full-path); }
                                         }
                                         if !entry.is-dir : SftpMenuItem {
-                                            label: "编辑";
+                                            label: @tr("Edit");
                                             clicked => { root.edit(entry.full-path); }
                                         }
                                         SftpMenuItem {
-                                            label: "删除";
+                                            label: @tr("Delete");
                                             tint: #d86c6c;
                                             clicked => { root.delete(entry.full-path); }
                                         }
