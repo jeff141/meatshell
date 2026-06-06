@@ -2,31 +2,31 @@
 // Keep these aligned with docs/UI guidelines.
 
 export global Theme {
-    // --- Palette -----------------------------------------------------------
-    out property <brush> bg-root: #1b1d23;
-    out property <brush> bg-panel: #23262d;
-    out property <brush> bg-panel-alt: #2a2d35;
-    out property <brush> bg-elevated: #30333c;
-    out property <brush> bg-hover: #373a44;
-    out property <brush> bg-active: #3f4350;
+    // --- Palette (mutable — switched at runtime by the Rust theme engine) ---
+    in-out property <brush> bg-root: #f0f2f5;
+    in-out property <brush> bg-panel: #ffffff;
+    in-out property <brush> bg-panel-alt: #e8eaed;
+    in-out property <brush> bg-elevated: #ffffff;
+    in-out property <brush> bg-hover: #dcdfe3;
+    in-out property <brush> bg-active: #c8ccd2;
 
-    out property <brush> border-subtle: #3a3d46;
-    out property <brush> border-strong: #4a4e59;
+    in-out property <brush> border-subtle: #d0d3d8;
+    in-out property <brush> border-strong: #b0b5bd;
 
-    out property <brush> text-primary: #e6e8ee;
-    out property <brush> text-secondary: #b4b9c4;   // was #a8adb8 — a touch brighter
-    out property <brush> text-muted: #9196a3;        // was #6b6f7a — below WCAG AA on the dark bg
+    in-out property <brush> text-primary: #1a1c20;
+    in-out property <brush> text-secondary: #4a4e59;
+    in-out property <brush> text-muted: #6b7080;
 
-    out property <brush> accent: #4a90e2;
-    out property <brush> accent-hover: #5aa0f2;
-    out property <brush> accent-pressed: #3a80d2;
+    in-out property <brush> accent: #2d7ae8;
+    in-out property <brush> accent-hover: #1a6ad8;
+    in-out property <brush> accent-pressed: #0d5ac0;
 
-    out property <brush> success: #4ec9b0;
-    out property <brush> warning: #e2a84a;
-    out property <brush> danger: #e25c5c;
+    in-out property <brush> success: #1a9e6e;
+    in-out property <brush> warning: #c88a1a;
+    in-out property <brush> danger: #d43c3c;
 
-    out property <brush> term-bg: #0e0f13;
-    out property <brush> term-fg: #d4d4d4;
+    in-out property <brush> term-bg: #ffffff;
+    in-out property <brush> term-fg: #1a1c20;
 
     // --- Typography --------------------------------------------------------
     out property <length> fs-xs: 11px;

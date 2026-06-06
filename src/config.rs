@@ -30,6 +30,7 @@ impl Secret {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -133,6 +134,15 @@ pub struct ConfigFile {
     /// UI language code: "zh" (default) or "en".
     #[serde(default)]
     pub language: String,
+    /// Slint UI style: "fluent" (default), "native", "cosmic", "material", "cupertino".
+    #[serde(default)]
+    pub style: String,
+    /// Color theme: "light" (default), "dark", or "system".
+    #[serde(default)]
+    pub theme: String,
+    /// Terminal color scheme: "dark" (default), "light", "solarized-dark", etc.
+    #[serde(default)]
+    pub terminal_theme: String,
 }
 
 pub struct ConfigStore {
@@ -229,6 +239,46 @@ impl ConfigStore {
 
     pub fn set_language(&mut self, lang: String) {
         self.cache.language = lang;
+    }
+
+    /// Slint UI style ("fluent" default).
+    pub fn style(&self) -> &str {
+        if self.cache.style.is_empty() {
+            "fluent"
+        } else {
+            &self.cache.style
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_style(&mut self, s: String) {
+        self.cache.style = s;
+    }
+
+    /// Color theme: "light" (default) / "dark" / "system".
+    pub fn theme(&self) -> &str {
+        if self.cache.theme.is_empty() {
+            "light"
+        } else {
+            &self.cache.theme
+        }
+    }
+
+    pub fn set_theme(&mut self, t: String) {
+        self.cache.theme = t;
+    }
+
+    /// Terminal color scheme: "dark" (default) / "light" / "solarized-dark" / etc.
+    pub fn terminal_theme(&self) -> &str {
+        if self.cache.terminal_theme.is_empty() {
+            "dark"
+        } else {
+            &self.cache.terminal_theme
+        }
+    }
+
+    pub fn set_terminal_theme(&mut self, t: String) {
+        self.cache.terminal_theme = t;
     }
 
     pub fn save(&self) -> Result<()> {

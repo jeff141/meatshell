@@ -40,6 +40,7 @@ component MenuItem inherits Rectangle {
 
     height: 28px;
     border-radius: Theme.radius-sm;
+    horizontal-stretch: 1;
     background: ta.has-hover ? Theme.bg-hover : transparent;
 
     ta := TouchArea {
@@ -107,12 +108,18 @@ export component TerminalView inherits Rectangle {
     callback select-update(int, int);       // extend drag-selection to (row, col)
     callback select-end();                  // finish selection → copy to clipboard
     callback select-autoscroll(int);        // auto-scroll while dragging past edge (dir: -1 up / +1 down)
+    callback set-terminal-theme(string);    // apply a named terminal color scheme
+
+    in property <string> terminal-theme: "Dark";  // current terminal scheme name
+    in property <[string]> terminal-themes;        // list of available scheme names
 
     // Right-click context-menu anchor + find-bar visibility (private UI state).
     property <length> ctx-x;
     property <length> ctx-y;
     property <bool> find-active: false;
     property <bool> selecting: false;
+    property <bool> show-theme-menu: false; // true = show theme submenu, false = main menu
+    property <bool> ctx-open: false;        // right-click menu visibility
     // Auto-scroll direction while drag-selecting past the visible edge.
     // 0 = none, -1 = above top (scroll to older), +1 = below bottom (newer).
     property <int> autoscroll-dir: 0;
@@ -308,7 +315,8 @@ export component TerminalView inherits Rectangle {
                                     if (ev.button == PointerEventButton.right) {
                                         root.ctx-x = self.mouse-x;
                                         root.ctx-y = self.mouse-y;
-                                        ctx-menu.show();
+                                        root.show-theme-menu = false;
+                                        root.ctx-open = true;
                                     } else if (ev.button == PointerEventButton.left) {
                                         root.selecting = true;
                                         root.select-start(
@@ -415,36 +423,131 @@ export component TerminalView inherits Rectangle {
                         }
 
                         // --- Right-click context menu ---------------------
-                        ctx-menu := PopupWindow {
-                            x: root.ctx-x;
-                            y: root.ctx-y;
-                            width: 132px;
-                            height: 132px;
+                        // --- Right-click context menu ---------------------
+                        // Overlay Rectangle instead of PopupWindow: PopupWindow
+                        // auto-closes when its content changes (Slint limitation),
+                        // making dynamic view switching impossible.  An overlay
+                        // Rectangle has no such restriction.
+                        if root.ctx-open : Rectangle {
+                            x: 0; y: 0;
+                            width: root.width;
+                            height: root.height;
+
+                            // Click outside the menu closes it.
+                            TouchArea {
+                                clicked => { root.ctx-open = false; }
+                            }
+
+                            // Menu panel
                             Rectangle {
+                                x: root.ctx-x;
+                                y: root.ctx-y;
+                                width: 164px;
+                                height: root.show-theme-menu
+                                    ? ((1 + root.terminal-themes.length) * 28 + 8) * 1px
+                                    : (5 * 28 + 8) * 1px;
                                 background: Theme.bg-panel;
                                 border-radius: Theme.radius-sm;
                                 border-width: 1px;
                                 border-color: Theme.border-strong;
                                 drop-shadow-blur: 12px;
                                 drop-shadow-color: #00000060;
-                                VerticalLayout {
+
+                                // Swallow clicks so they don't reach the backdrop.
+                                TouchArea {}
+
+                                // --- Theme submenu ---
+                                if root.show-theme-menu : VerticalLayout {
                                     padding: 4px;
                                     spacing: 1px;
+                                    // Back button
+                                    Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: back-ta.has-hover ? Theme.bg-hover : transparent;
+                                        back-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.show-theme-menu = false; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { text: "\u{E314}"; font-family: "Material Icons";
+                                                   color: Theme.text-secondary; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                            Text { text: @tr("Back");
+                                                   color: Theme.text-primary; font-size: Theme.fs-md;
+                                                   vertical-alignment: center; horizontal-stretch: 1; }
+                                        }
+                                    }
+                                    for name in root.terminal-themes : Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: th-ta.has-hover ? Theme.bg-hover : transparent;
+                                        th-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-terminal-theme(name); root.ctx-open = false; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 6px;
+                                            if name == root.terminal-theme : Text {
+                                                text: "\u{E5CA}"; font-family: "Material Icons";
+                                                color: Theme.accent; font-size: Theme.fs-sm;
+                                                vertical-alignment: center;
+                                            }
+                                            Text { text: name;
+                                                   color: name == root.terminal-theme ? Theme.accent : Theme.text-primary;
+                                                   font-size: Theme.fs-sm;
+                                                   vertical-alignment: center;
+                                                   horizontal-stretch: 1; }
+                                        }
+                                    }
+                                }
+
+                                // --- Main menu ---
+                                if !root.show-theme-menu : VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 1px;
+                                    // Terminal theme at top
+                                    Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: tm-ta.has-hover ? Theme.bg-hover : transparent;
+                                        tm-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.show-theme-menu = true; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { text: "\u{E8B8}"; font-family: "Material Icons";
+                                                   color: Theme.text-secondary; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                            Text { text: @tr("Terminal theme");
+                                                   color: Theme.text-primary; font-size: Theme.fs-md;
+                                                   vertical-alignment: center; horizontal-stretch: 1; }
+                                            Text { text: "\u{E315}"; font-family: "Material Icons";
+                                                   color: Theme.text-muted; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                        }
+                                    }
+                                    Rectangle { height: 4px; }
                                     MenuItem {
                                         icon: "\u{E14D}"; label: @tr("Copy");
-                                        clicked => { root.copy-terminal-text(); ime-input.focus(); }
+                                        clicked => { root.copy-terminal-text(); root.ctx-open = false; }
                                     }
                                     MenuItem {
                                         icon: "\u{E14F}"; label: @tr("Paste");
-                                        clicked => { root.paste-from-clipboard(); ime-input.focus(); }
+                                        clicked => { root.paste-from-clipboard(); root.ctx-open = false; }
                                     }
                                     MenuItem {
                                         icon: "\u{E872}"; label: @tr("Clear buffer");
-                                        clicked => { root.clear-terminal(); ime-input.focus(); }
+                                        clicked => { root.clear-terminal(); root.ctx-open = false; }
                                     }
                                     MenuItem {
                                         icon: "\u{E8B6}"; label: @tr("Find");
-                                        clicked => { root.find-active = true; }
+                                        clicked => { root.find-active = true; root.ctx-open = false; }
                                     }
                                 }
                             }

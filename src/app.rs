@@ -99,8 +99,200 @@ type LocalSnap = Arc<Mutex<SystemSnapshot>>;
 // Slint generates types into this scope.
 slint::include_modules!();
 
+/// vt100 default foreground colour — updated by the theme engine so the
+/// terminal text remains readable on both light and dark backgrounds.
+static VT_DEFAULT_FG: std::sync::Mutex<(u8, u8, u8)> =
+    std::sync::Mutex::new((0x1a, 0x1c, 0x20)); // light theme default
+
+// ---------------------------------------------------------------------------
+// Terminal color scheme presets (independent of the global app theme)
+// ---------------------------------------------------------------------------
+
+struct TermPreset {
+    name: &'static str,
+    bg: &'static str,
+    fg: &'static str,
+}
+
+static TERM_PRESETS: &[TermPreset] = &[
+    TermPreset { name: "Dark",           bg: "#0e0f13", fg: "#d4d4d4" },
+    TermPreset { name: "Light",          bg: "#ffffff", fg: "#1a1c20" },
+    TermPreset { name: "Solarized Dark", bg: "#002b36", fg: "#839496" },
+    TermPreset { name: "Solarized Light",bg: "#fdf6e3", fg: "#657b83" },
+    TermPreset { name: "Monokai",        bg: "#272822", fg: "#f8f8f2" },
+    TermPreset { name: "Dracula",        bg: "#282a36", fg: "#f8f8f2" },
+    TermPreset { name: "Nord",           bg: "#2e3440", fg: "#d8dee9" },
+    TermPreset { name: "One Dark",       bg: "#282c34", fg: "#abb2bf" },
+    TermPreset { name: "Gruvbox",        bg: "#282828", fg: "#ebdbb2" },
+];
+
+fn find_term_preset(name: &str) -> &'static TermPreset {
+    TERM_PRESETS.iter().find(|p| p.name == name).unwrap_or(&TERM_PRESETS[0])
+}
+
+/// Read the hex color from a TermPreset and update VT_DEFAULT_FG.
+fn apply_terminal_theme(win: &AppWindow, preset: &TermPreset) {
+    let t = Theme::get(win);
+    t.set_term_bg(hex_to_brush(preset.bg));
+    t.set_term_fg(hex_to_brush(preset.fg));
+    let fg = preset.fg.trim_start_matches('#');
+    if fg.len() == 6 {
+        let r = u8::from_str_radix(&fg[0..2], 16).unwrap_or(0);
+        let g = u8::from_str_radix(&fg[2..4], 16).unwrap_or(0);
+        let b = u8::from_str_radix(&fg[4..6], 16).unwrap_or(0);
+        *VT_DEFAULT_FG.lock().unwrap() = (r, g, b);
+    }
+}
+
 /// Number of samples kept for the sparkline.
 const NET_HISTORY_LEN: usize = 60;
+
+// ---------------------------------------------------------------------------
+// Theme engine — runtime color scheme switching
+// ---------------------------------------------------------------------------
+
+struct ThemeColors {
+    bg_root: &'static str,
+    bg_panel: &'static str,
+    bg_panel_alt: &'static str,
+    bg_elevated: &'static str,
+    bg_hover: &'static str,
+    bg_active: &'static str,
+    border_subtle: &'static str,
+    border_strong: &'static str,
+    text_primary: &'static str,
+    text_secondary: &'static str,
+    text_muted: &'static str,
+    accent: &'static str,
+    accent_hover: &'static str,
+    accent_pressed: &'static str,
+    success: &'static str,
+    warning: &'static str,
+    danger: &'static str,
+}
+
+const LIGHT: ThemeColors = ThemeColors {
+    bg_root: "#f0f2f5",
+    bg_panel: "#ffffff",
+    bg_panel_alt: "#e8eaed",
+    bg_elevated: "#ffffff",
+    bg_hover: "#dcdfe3",
+    bg_active: "#c8ccd2",
+    border_subtle: "#d0d3d8",
+    border_strong: "#b0b5bd",
+    text_primary: "#1a1c20",
+    text_secondary: "#4a4e59",
+    text_muted: "#6b7080",
+    accent: "#2d7ae8",
+    accent_hover: "#1a6ad8",
+    accent_pressed: "#0d5ac0",
+    success: "#1a9e6e",
+    warning: "#c88a1a",
+    danger: "#d43c3c",
+};
+
+const DARK: ThemeColors = ThemeColors {
+    bg_root: "#1b1d23",
+    bg_panel: "#23262d",
+    bg_panel_alt: "#2a2d35",
+    bg_elevated: "#30333c",
+    bg_hover: "#373a44",
+    bg_active: "#3f4350",
+    border_subtle: "#3a3d46",
+    border_strong: "#4a4e59",
+    text_primary: "#e6e8ee",
+    text_secondary: "#b4b9c4",
+    text_muted: "#9196a3",
+    accent: "#4a90e2",
+    accent_hover: "#5aa0f2",
+    accent_pressed: "#3a80d2",
+    success: "#4ec9b0",
+    warning: "#e2a84a",
+    danger: "#e25c5c",
+};
+
+/// Detect whether the KDE desktop is using a light or dark color scheme by
+/// reading ~/.config/kdeglobals.  Returns "dark" or "light".
+fn detect_system_theme() -> &'static str {
+    let Ok(home) = std::env::var("HOME") else { return "dark" };
+    let path = format!("{}/.config/kdeglobals", home);
+    let Ok(contents) = std::fs::read_to_string(&path) else { return "dark" };
+
+    // Find the [Colors:View] section and read the BackgroundNormal line.
+    let mut in_view = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[Colors:View]" {
+            in_view = true;
+            continue;
+        }
+        if trimmed.starts_with('[') && in_view {
+            break; // left the section
+        }
+        if in_view {
+            if let Some(rest) = trimmed.strip_prefix("BackgroundNormal=") {
+                // Format: "R,G,B" e.g. "255,255,255"
+                let parts: Vec<u8> = rest
+                    .split(',')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if parts.len() >= 3 {
+                    // ITU-R BT.709 luminance
+                    let lum = parts[0] as f32 * 0.2126
+                            + parts[1] as f32 * 0.7152
+                            + parts[2] as f32 * 0.0722;
+                    return if lum > 128.0 { "light" } else { "dark" };
+                }
+            }
+        }
+    }
+    "dark"
+}
+
+fn colors_for(theme: &str) -> &'static ThemeColors {
+    match theme {
+        "dark" => &DARK,
+        "system" => {
+            let detected = detect_system_theme();
+            if detected == "light" { &LIGHT } else { &DARK }
+        }
+        _ => &LIGHT, // default
+    }
+}
+
+fn hex_to_brush(hex: &str) -> slint::Brush {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+        slint::Brush::from(slint::Color::from_rgb_u8(r, g, b))
+    } else {
+        slint::Brush::from(slint::Color::from_argb_encoded(0xFF000000))
+    }
+}
+
+fn apply_theme(win: &AppWindow, c: &ThemeColors) {
+    let t = Theme::get(win);
+    t.set_bg_root(hex_to_brush(c.bg_root));
+    t.set_bg_panel(hex_to_brush(c.bg_panel));
+    t.set_bg_panel_alt(hex_to_brush(c.bg_panel_alt));
+    t.set_bg_elevated(hex_to_brush(c.bg_elevated));
+    t.set_bg_hover(hex_to_brush(c.bg_hover));
+    t.set_bg_active(hex_to_brush(c.bg_active));
+    t.set_border_subtle(hex_to_brush(c.border_subtle));
+    t.set_border_strong(hex_to_brush(c.border_strong));
+    t.set_text_primary(hex_to_brush(c.text_primary));
+    t.set_text_secondary(hex_to_brush(c.text_secondary));
+    t.set_text_muted(hex_to_brush(c.text_muted));
+    t.set_accent(hex_to_brush(c.accent));
+    t.set_accent_hover(hex_to_brush(c.accent_hover));
+    t.set_accent_pressed(hex_to_brush(c.accent_pressed));
+    t.set_success(hex_to_brush(c.success));
+    t.set_warning(hex_to_brush(c.warning));
+    t.set_danger(hex_to_brush(c.danger));
+    // term-bg / term-fg are managed by the terminal theme engine, not here.
+}
 
 // ---------------------------------------------------------------------------
 // Linux clipboard helpers (Wayland: wl-copy/wl-paste, X11: xclip)
@@ -199,6 +391,24 @@ pub fn run() -> Result<()> {
     crate::i18n::set_language(store.borrow().language());
     crate::i18n::apply_to_slint();
     window.set_lang_en(crate::i18n::is_en());
+    window.set_ui_style(store.borrow().style().into());
+
+    // Apply saved color theme (default: light).
+    let initial_theme = store.borrow().theme().to_string();
+    apply_theme(&window, colors_for(&initial_theme));
+    window.set_ui_theme(initial_theme.into());
+
+    // Apply saved terminal color scheme (default: Dark).
+    let initial_term = store.borrow().terminal_theme().to_string();
+    apply_terminal_theme(&window, find_term_preset(&initial_term));
+    window.set_terminal_theme(initial_term.into());
+
+    // Populate the terminal theme name list for the right-click submenu.
+    let theme_names: Vec<SharedString> = TERM_PRESETS
+        .iter()
+        .map(|p| p.name.into())
+        .collect();
+    window.set_terminal_themes(ModelRc::from(Rc::new(VecModel::from(theme_names))));
 
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
@@ -281,6 +491,109 @@ pub fn run() -> Result<()> {
             if let Some(w) = weak.upgrade() {
                 w.set_lang_en(crate::i18n::is_en());
                 w.invoke_refresh_sidebar();
+            }
+        });
+    }
+
+    // UI style switcher: save to config (applies on next restart).
+    {
+        let store = store.clone();
+        window.on_set_ui_style(move |style| {
+            let mut s = store.borrow_mut();
+            s.set_style(style.to_string());
+            let _ = s.save();
+            tracing::info!("UI style saved: {} (restart to apply)", style);
+        });
+    }
+
+    // Color theme switcher: applies immediately, no restart needed.
+    {
+        let store = store.clone();
+        let weak = window.as_weak();
+        window.on_set_theme(move |theme| {
+            let theme_str = theme.to_string();
+            {
+                let mut s = store.borrow_mut();
+                s.set_theme(theme_str.clone());
+                let _ = s.save();
+            }
+            if let Some(w) = weak.upgrade() {
+                apply_theme(&w, colors_for(&theme_str));
+                w.set_ui_theme(theme_str.into());
+            }
+        });
+    }
+
+    // Terminal color scheme switcher from right-click submenu.
+    {
+        let store = store.clone();
+        let bufs = bufs.clone();
+        let weak = window.as_weak();
+        window.on_set_terminal_theme(move |name| {
+            let name_str = name.to_string();
+            {
+                let mut s = store.borrow_mut();
+                s.set_terminal_theme(name_str.clone());
+                let _ = s.save();
+            }
+            if let Some(w) = weak.upgrade() {
+                apply_terminal_theme(&w, find_term_preset(&name_str));
+                w.set_terminal_theme(name_str.into());
+
+                // Force re-render all terminal buffers so existing spans pick
+                // up the new VT_DEFAULT_FG colour.
+                let mut map = bufs.lock().unwrap();
+                for (tab_id, buf) in map.iter_mut() {
+                    let b = buf.render();
+                    let cols = buf.parser.screen().size().1;
+                    let matches = compute_find_matches(
+                        &buf.displayed_text, &buf.find_query,
+                    );
+                    let sel = match buf.sel {
+                        Some((sr, sc, er, ec)) => selection_rects(sr, sc, er, ec, cols),
+                        None => Vec::new(),
+                    };
+                    let spans = ModelRc::from(Rc::new(VecModel::from(b.spans)));
+                    let fm = ModelRc::from(Rc::new(VecModel::from(matches)));
+                    let sm = ModelRc::from(Rc::new(VecModel::from(sel)));
+                    let (cr, cc, ru, alt) = (b.cursor_row, b.cursor_col, b.rows_used, b.is_alt);
+                    let tid = tab_id.clone();
+                    set_terminal_row(&w, &tid, move |row| {
+                        row.spans = spans.clone();
+                        row.cursor_row = cr;
+                        row.cursor_col = cc;
+                        row.rows_used = ru;
+                        row.is_alt_screen = alt;
+                        row.find_matches = fm.clone();
+                        row.selection = sm.clone();
+                    });
+                }
+            }
+        });
+    }
+
+    // Cycle app theme from settings menu: light → dark → system → light.
+    {
+        let store = store.clone();
+        let weak = window.as_weak();
+        window.on_cycle_theme(move || {
+            let next = {
+                let s = store.borrow();
+                match s.theme() {
+                    "light" => "dark",
+                    "dark" => "system",
+                    _ => "light",
+                }
+                .to_string()
+            };
+            {
+                let mut s = store.borrow_mut();
+                s.set_theme(next.clone());
+                let _ = s.save();
+            }
+            if let Some(w) = weak.upgrade() {
+                apply_theme(&w, colors_for(&next));
+                w.set_ui_theme(next.into());
             }
         });
     }
@@ -2685,7 +2998,7 @@ fn build_row(screen: &vt100::Screen, r: u16, cols: u16) -> Line {
         }
         runs.push(HistSpan {
             text,
-            fg: vt_color_to_slint(fg, bold),
+            fg: vt_color_to_slint(fg, bold, *VT_DEFAULT_FG.lock().unwrap()),
             bg: vt_bg_to_slint(bg),
             bold,
             col: start_col as i32,
@@ -2958,9 +3271,9 @@ const ANSI16: [(u8, u8, u8); 16] = [
 /// Convert a vt100 colour (+ bold) to a Slint colour.  Bold + a base colour
 /// (0–7) maps to the bright variant (8–15), matching how terminals render
 /// `ls --color` (e.g. bold-green executables, bold-blue directories).
-fn vt_color_to_slint(color: vt100::Color, bold: bool) -> slint::Color {
+fn vt_color_to_slint(color: vt100::Color, bold: bool, default_fg: (u8, u8, u8)) -> slint::Color {
     let (r, g, b) = match color {
-        vt100::Color::Default => (0xd4, 0xd4, 0xd4), // Theme.term-fg
+        vt100::Color::Default => default_fg,
         vt100::Color::Idx(i) => idx_to_rgb(i, bold),
         vt100::Color::Rgb(r, g, b) => (r, g, b),
     };

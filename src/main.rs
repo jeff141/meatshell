@@ -18,6 +18,19 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // Apply the UI style from config before creating any Slint windows.
+    // Honours SLINT_STYLE if already set in the environment; otherwise reads
+    // the user's saved preference (default: "fluent").
+    if std::env::var("SLINT_STYLE").is_err() {
+        if let Ok(store) = config::ConfigStore::load() {
+            let style = store.style().to_string();
+            if style != "fluent" {
+                tracing::info!("applying UI style: {}", style);
+            }
+            std::env::set_var("SLINT_STYLE", &style);
+        }
+    }
+
     // ── IME policy ───────────────────────────────────────────────────────────
     // NOTE: We deliberately DO **NOT** call `ImmDisableIME` here.
     //

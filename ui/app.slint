@@ -17,7 +17,7 @@ import { SessionDialog, SessionDraft } from "session_dialog.slint";
 import { TerminalView, TermSpan, TermMatch } from "terminal_view.slint";
 import { SftpEntry, SftpTreeNode } from "sftp_panel.slint";
 
-export { SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode }
+export { Theme, SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode }
 
 // --- TerminalState ---------------------------------------------------------
 // Per-terminal view-model exposed to Rust. A TabInfo has the metadata; the
@@ -92,11 +92,19 @@ export component AppWindow inherits Window {
     in property <[TransferInfo]> transfers; // download/upload records (newest first)
     in property <[string]> about-libs;      // open-source libraries used
     in-out property <bool> lang-en: false;  // current UI language (false = 中文)
+    in-out property <string> ui-style: "fluent";  // Slint UI style
+    in-out property <string> ui-theme: "light";   // Color theme: light/dark/system
+    in-out property <string> terminal-theme: "Dark";  // Terminal color scheme name
+    in property <[string]> terminal-themes;        // Available terminal scheme names
     in-out property <length> sftp-panel-height: 220px; // shared; lets Rust locate the drop zone
     callback pick-download-dir();            // open a folder picker
     callback open-download-dir();            // reveal the folder in the OS
     callback clear-transfers();              // wipe the transfer history
     callback set-language(string);           // switch UI language ("zh" / "en")
+    callback set-ui-style(string);           // switch Slint style (fluent/native/cosmic)
+    callback set-theme(string);              // switch color theme (light/dark/system)
+    callback cycle-theme();                  // cycle app light → dark → system
+    callback set-terminal-theme(string);     // switch terminal color scheme
 
     // --- Session list ------------------------------------------------------
     in property <[SessionInfo]> sessions;
@@ -248,6 +256,8 @@ export component AppWindow inherits Window {
                     cursor-col: term.cursor-col;
                     rows-used: term.rows-used;
                     is-alt-screen: term.is-alt-screen;
+                    terminal-theme: root.terminal-theme;
+                    terminal-themes: root.terminal-themes;
                     find-matches: term.find-matches;
                     selection: term.selection;
                     sftp-panel-height <=> root.sftp-panel-height;
@@ -269,6 +279,7 @@ export component AppWindow inherits Window {
                     paste-from-clipboard() => { root.paste-from-clipboard(term.id); }
                     copy-terminal-text() => { root.copy-terminal-text(term.id); }
                     clear-terminal() => { root.clear-terminal(term.id); }
+                    set-terminal-theme(name) => { root.set-terminal-theme(name); }
                     find-query-changed(q) => { root.find-query-changed(term.id, q); }
                     terminal-scroll(d) => { root.terminal-scroll(term.id, d); }
                     select-start(r, c) => { root.term-select-start(term.id, r, c); }
@@ -519,7 +530,7 @@ export component AppWindow inherits Window {
         x: parent.width - 196px;
         y: 40px;
         width: 198px;
-        height: 104px;
+        height: 132px;
         visible: root.settings-open;
         background: Theme.bg-panel;
         border-radius: Theme.radius-md;
@@ -572,6 +583,33 @@ export component AppWindow inherits Window {
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            vertical-alignment: center; }
                     Text { text: root.lang-en ? "切换到中文" : "Switch to English";
+                           color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            // Color theme selector: cycles through light → dark → system.
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: style-ta.has-hover ? Theme.bg-hover : transparent;
+                style-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.ui-theme = root.ui-theme == "light" ? "dark"
+                                      : root.ui-theme == "dark" ? "system"
+                                      : "light";
+                        root.set-theme(root.ui-theme);
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 8px; spacing: 8px;
+                    Text { text: "\u{E8B8}"; font-family: "Material Icons"; // settings/theme
+                           color: Theme.text-secondary; font-size: Theme.fs-sm;
+                           vertical-alignment: center; }
+                    Text { text: (root.lang-en ? "Theme: " : "主题: ")
+                                 + (root.ui-theme == "light" ? (root.lang-en ? "Light" : "浅色")
+                                   : root.ui-theme == "dark" ? (root.lang-en ? "Dark" : "深色")
+                                   : (root.lang-en ? "System" : "跟随系统"));
                            color: Theme.text-primary; font-size: Theme.fs-md;
                            vertical-alignment: center; horizontal-stretch: 1; }
                 }
