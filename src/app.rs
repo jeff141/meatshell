@@ -6,10 +6,10 @@
 //!   * Manage the tab list + per-tab `SessionHandle` map.
 //!   * Route Slint callbacks to the right domain module.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 /// Per-terminal state: vt100 parser drives all rendering for both normal
 /// (bash) and alt-screen (vim/nano/htop) modes.
@@ -58,7 +58,7 @@ use i_slint_backend_winit::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::runtime::Runtime;
 
-use crate::config::{AuthMethod, ConfigStore, Secret, Session};
+use crate::config::{AuthMethod, CloudProvider, CloudSyncConfig, ConfigStore, Secret, Session};
 use crate::i18n::t;
 use crate::sftp::{spawn_sftp, SftpHandle};
 use crate::ssh::{
@@ -96,6 +96,12 @@ type TabStatuses = Arc<Mutex<HashMap<String, TabStatus>>>;
 /// Last local-machine sample (shown on the welcome tab).
 type LocalSnap = Arc<Mutex<SystemSnapshot>>;
 
+enum CloudUiEvent {
+    Status(String),
+    LoginFinished(std::result::Result<crate::cloud_sync::LoginResult, String>),
+    SyncFinished(std::result::Result<crate::cloud_sync::SyncResult, String>),
+}
+
 // Slint generates types into this scope.
 slint::include_modules!();
 
@@ -104,9 +110,7 @@ const NET_HISTORY_LEN: usize = 60;
 
 pub fn run() -> Result<()> {
     // --- Runtime + store -------------------------------------------------
-    let runtime = Arc::new(
-        Runtime::new().context("failed to start tokio runtime")?,
-    );
+    let runtime = Arc::new(Runtime::new().context("failed to start tokio runtime")?);
     let store = Rc::new(RefCell::new(
         ConfigStore::load().context("failed to load config")?,
     ));
@@ -286,6 +290,31 @@ pub fn run() -> Result<()> {
         });
     }
 
+    // Cloud sync: browser login + private repository encrypted snapshots.
+    apply_cloud_config_to_window(&window, store.borrow().cloud_sync());
+    let (cloud_tx, cloud_rx) = mpsc::channel::<CloudUiEvent>();
+    let cloud_busy = Rc::new(Cell::new(false));
+    wire_cloud_sync_callbacks(
+        &window,
+        store.clone(),
+        runtime.clone(),
+        cloud_tx.clone(),
+        cloud_busy.clone(),
+    );
+    start_cloud_event_pump(
+        &window,
+        store.clone(),
+        sessions_model.clone(),
+        cloud_rx,
+        cloud_busy.clone(),
+    );
+    start_cloud_auto_sync(
+        store.clone(),
+        runtime.clone(),
+        cloud_tx.clone(),
+        cloud_busy.clone(),
+    );
+
     // Transfer records (download/upload progress + history) shown in the popup.
     let transfers_model: Rc<VecModel<TransferInfo>> = Rc::new(VecModel::default());
     window.set_transfers(ModelRc::from(transfers_model.clone()));
@@ -298,23 +327,53 @@ pub fn run() -> Result<()> {
     {
         let libs: Vec<SharedString> = [
             t("Slint — 图形界面框架 (GUI)", "Slint — GUI framework"),
-            t("russh / russh-keys — SSH 协议实现", "russh / russh-keys — SSH protocol"),
-            t("russh-sftp — SFTP 文件传输", "russh-sftp — SFTP file transfer"),
+            t(
+                "russh / russh-keys — SSH 协议实现",
+                "russh / russh-keys — SSH protocol",
+            ),
+            t(
+                "russh-sftp — SFTP 文件传输",
+                "russh-sftp — SFTP file transfer",
+            ),
             t("ssh-key — SSH 密钥解析", "ssh-key — SSH key parsing"),
             t("tokio — 异步运行时", "tokio — async runtime"),
-            t("vt100 — 终端 (VT100/xterm) 解析", "vt100 — terminal (VT100/xterm) parser"),
-            t("sysinfo — 本机资源采集", "sysinfo — local resource sampling"),
-            t("serde / serde_json — 配置序列化", "serde / serde_json — config serialization"),
+            t(
+                "vt100 — 终端 (VT100/xterm) 解析",
+                "vt100 — terminal (VT100/xterm) parser",
+            ),
+            t(
+                "sysinfo — 本机资源采集",
+                "sysinfo — local resource sampling",
+            ),
+            t(
+                "serde / serde_json — 配置序列化",
+                "serde / serde_json — config serialization",
+            ),
             t("arboard — 系统剪贴板", "arboard — system clipboard"),
             t("rfd — 原生文件对话框", "rfd — native file dialogs"),
-            t("directories — 配置目录定位", "directories — config dir lookup"),
+            t(
+                "directories — 配置目录定位",
+                "directories — config dir lookup",
+            ),
             t("chrono — 日期时间处理", "chrono — date/time handling"),
             t("uuid — 唯一标识符", "uuid — unique identifiers"),
-            t("anyhow / thiserror — 错误处理", "anyhow / thiserror — error handling"),
-            t("tracing / tracing-subscriber — 日志", "tracing / tracing-subscriber — logging"),
-            t("futures / async-trait — 异步辅助", "futures / async-trait — async helpers"),
+            t(
+                "anyhow / thiserror — 错误处理",
+                "anyhow / thiserror — error handling",
+            ),
+            t(
+                "tracing / tracing-subscriber — 日志",
+                "tracing / tracing-subscriber — logging",
+            ),
+            t(
+                "futures / async-trait — 异步辅助",
+                "futures / async-trait — async helpers",
+            ),
             t("rand — 随机数", "rand — randomness"),
-            t("winresource — Windows 图标/资源嵌入", "winresource — Windows icon/resource embedding"),
+            t(
+                "winresource — Windows 图标/资源嵌入",
+                "winresource — Windows icon/resource embedding",
+            ),
         ]
         .iter()
         .map(|s| (*s).into())
@@ -332,7 +391,12 @@ pub fn run() -> Result<()> {
         sftp_manual_nav.clone(),
     );
     wire_sftp_callbacks(&window, sftp_handles.clone(), sftp_manual_nav.clone());
-    wire_key_input(&window, handles.clone(), bufs.clone(), last_term_size.clone());
+    wire_key_input(
+        &window,
+        handles.clone(),
+        bufs.clone(),
+        last_term_size.clone(),
+    );
 
     // --- System sampler (1 Hz) ------------------------------------------
     let sampler = Rc::new(Mutex::new(SystemSampler::new()));
@@ -352,10 +416,7 @@ pub fn run() -> Result<()> {
             };
             // Append the raw local throughput to the bottom-graph ring buffer
             // (normalisation happens at display time so the graph auto-scales).
-            push_ring(
-                &mut tick_net.lock().unwrap(),
-                snap.net_bytes_per_sec as f32,
-            );
+            push_ring(&mut tick_net.lock().unwrap(), snap.net_bytes_per_sec as f32);
             // Stash the local sample; the sidebar shows it on the welcome tab
             // and in the bottom network graph.
             *tick_local.lock().unwrap() = snap.clone();
@@ -416,12 +477,18 @@ fn center_window(win: &AppWindow) {
     }
     #[link(name = "user32")]
     extern "system" {
-        fn SystemParametersInfoW(action: u32, uiparam: u32, pvparam: *mut Rect, winini: u32) -> i32;
+        fn SystemParametersInfoW(action: u32, uiparam: u32, pvparam: *mut Rect, winini: u32)
+            -> i32;
     }
     const SPI_GETWORKAREA: u32 = 0x0030;
 
     let size = win.window().size(); // physical pixels
-    let mut wa = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut wa = Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     let ok = unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa, 0) };
     if ok == 0 {
         return;
@@ -482,10 +549,7 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
     let w = win.window();
     let scale = w.scale_factor().max(0.01);
     let size = w.size(); // physical
-    let Some(inner) = w
-        .with_winit_window(|ww| ww.inner_position().ok())
-        .flatten()
-    else {
+    let Some(inner) = w.with_winit_window(|ww| ww.inner_position().ok()).flatten() else {
         return;
     };
     let Some((cx, cy)) = cursor_pos() else {
@@ -503,10 +567,7 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
     let zone_left = 381.0_f32;
     let zone_top = h_logical - h_sftp + 51.0;
     let zone_bottom = h_logical - 18.0;
-    if client_x < zone_left
-        || client_x > w_logical
-        || client_y < zone_top
-        || client_y > zone_bottom
+    if client_x < zone_left || client_x > w_logical || client_y < zone_top || client_y > zone_bottom
     {
         return; // dropped outside the file list — ignore
     }
@@ -548,6 +609,343 @@ fn sync_sessions_to_model(store: &ConfigStore, model: &VecModel<SessionInfo>) {
         })
         .collect();
     model.set_vec(rows);
+}
+
+fn apply_cloud_config_to_window(win: &AppWindow, cfg: &CloudSyncConfig) {
+    win.set_cloud_provider(cfg.provider.as_str().into());
+    win.set_cloud_server(cfg.server_url.clone().into());
+    win.set_cloud_repo(cfg.repo_name.clone().into());
+    win.set_cloud_auto_sync(cfg.auto_sync);
+    win.set_cloud_sync_interval(cfg.interval_minutes.max(1).to_string().into());
+    win.set_cloud_username(cfg.username.clone().into());
+    win.set_cloud_logged_in(!cfg.username.is_empty() && !cfg.token_key.is_empty());
+    if cfg.username.is_empty() {
+        win.set_cloud_status(t("未登录同步账号", "Not signed in for sync").into());
+    } else if cfg.last_synced_at > 0 {
+        win.set_cloud_status(
+            format!(
+                "{} {}",
+                t("上次同步", "Last synced"),
+                format_sync_time(cfg.last_synced_at)
+            )
+            .into(),
+        );
+    } else {
+        win.set_cloud_status(format!("{} {}", cfg.provider.label(), cfg.username).into());
+    }
+}
+
+fn wire_cloud_sync_callbacks(
+    window: &AppWindow,
+    store: Rc<RefCell<ConfigStore>>,
+    runtime: Arc<Runtime>,
+    tx: mpsc::Sender<CloudUiEvent>,
+    busy: Rc<Cell<bool>>,
+) {
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        window.on_cloud_save_settings(move |provider, server, repo, auto, interval| {
+            let provider = cloud_provider_from_str(&provider.to_string());
+            let interval = parse_sync_interval(&interval.to_string());
+            let cfg = {
+                let mut s = store.borrow_mut();
+                let cfg = crate::cloud_sync::normalized_config(
+                    provider,
+                    server.to_string(),
+                    repo.to_string(),
+                    auto,
+                    interval,
+                    s.cloud_sync(),
+                );
+                s.set_cloud_sync(cfg.clone());
+                if let Err(err) = s.save() {
+                    tracing::warn!("failed to save cloud sync settings: {err:#}");
+                }
+                cfg
+            };
+            if let Some(w) = weak.upgrade() {
+                apply_cloud_config_to_window(&w, &cfg);
+                w.set_cloud_status(t("同步设置已保存", "Sync settings saved").into());
+            }
+        });
+    }
+
+    {
+        let store = store.clone();
+        let runtime = runtime.clone();
+        let tx = tx.clone();
+        let busy = busy.clone();
+        window.on_cloud_login(move |provider, server, repo, password, auto, interval| {
+            if busy.get() {
+                let _ = tx.send(CloudUiEvent::Status(
+                    t("同步任务正在运行", "Sync task is already running").to_string(),
+                ));
+                return;
+            }
+            let provider = cloud_provider_from_str(&provider.to_string());
+            let interval = parse_sync_interval(&interval.to_string());
+            let password = password.to_string();
+            let cfg = {
+                let mut s = store.borrow_mut();
+                let cfg = crate::cloud_sync::normalized_config(
+                    provider,
+                    server.to_string(),
+                    repo.to_string(),
+                    auto,
+                    interval,
+                    s.cloud_sync(),
+                );
+                s.set_cloud_sync(cfg.clone());
+                let _ = s.save();
+                cfg
+            };
+            busy.set(true);
+            let _ = tx.send(CloudUiEvent::Status(
+                t("正在启动浏览器登录...", "Starting browser login...").to_string(),
+            ));
+            launch_cloud_login(&runtime, tx.clone(), cfg, password);
+        });
+    }
+
+    {
+        let store = store.clone();
+        let runtime = runtime.clone();
+        let tx = tx.clone();
+        let busy = busy.clone();
+        window.on_cloud_sync_now(move |provider, server, repo, password, auto, interval| {
+            if busy.get() {
+                let _ = tx.send(CloudUiEvent::Status(
+                    t("同步任务正在运行", "Sync task is already running").to_string(),
+                ));
+                return;
+            }
+            let provider = cloud_provider_from_str(&provider.to_string());
+            let interval = parse_sync_interval(&interval.to_string());
+            let password = password.to_string();
+            let (cfg, snapshot) = {
+                let mut s = store.borrow_mut();
+                let cfg = crate::cloud_sync::normalized_config(
+                    provider,
+                    server.to_string(),
+                    repo.to_string(),
+                    auto,
+                    interval,
+                    s.cloud_sync(),
+                );
+                s.set_cloud_sync(cfg.clone());
+                let _ = s.save();
+                (cfg, s.snapshot())
+            };
+            busy.set(true);
+            let _ = tx.send(CloudUiEvent::Status(
+                t("正在同步...", "Syncing...").to_string(),
+            ));
+            launch_cloud_sync(&runtime, tx.clone(), cfg, snapshot, Some(password));
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        window.on_cloud_disconnect(move || {
+            let cfg = {
+                let mut s = store.borrow_mut();
+                let old = s.cloud_sync().clone();
+                crate::cloud_sync::clear_saved_secrets(&old);
+                let mut cfg = old;
+                cfg.username.clear();
+                cfg.repo_owner.clear();
+                cfg.token_key.clear();
+                cfg.password_key.clear();
+                cfg.last_synced_at = 0;
+                s.set_cloud_sync(cfg.clone());
+                let _ = s.save();
+                cfg
+            };
+            if let Some(w) = weak.upgrade() {
+                apply_cloud_config_to_window(&w, &cfg);
+                w.set_cloud_status(t("已退出同步账号", "Signed out from sync").into());
+            }
+        });
+    }
+}
+
+fn start_cloud_event_pump(
+    window: &AppWindow,
+    store: Rc<RefCell<ConfigStore>>,
+    sessions_model: Rc<VecModel<SessionInfo>>,
+    rx: mpsc::Receiver<CloudUiEvent>,
+    busy: Rc<Cell<bool>>,
+) {
+    let weak = window.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(200),
+        move || {
+            while let Ok(evt) = rx.try_recv() {
+                match evt {
+                    CloudUiEvent::Status(status) => {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_cloud_status(status.into());
+                        }
+                    }
+                    CloudUiEvent::LoginFinished(result) => {
+                        busy.set(false);
+                        if let Some(w) = weak.upgrade() {
+                            match result {
+                                Ok(result) => {
+                                    {
+                                        let mut s = store.borrow_mut();
+                                        s.set_cloud_sync(result.config.clone());
+                                        let _ = s.save();
+                                    }
+                                    apply_cloud_config_to_window(&w, &result.config);
+                                    w.set_cloud_status(result.status.into());
+                                    w.set_cloud_password("".into());
+                                }
+                                Err(err) => w.set_cloud_status(err.into()),
+                            }
+                        }
+                    }
+                    CloudUiEvent::SyncFinished(result) => {
+                        busy.set(false);
+                        if let Some(w) = weak.upgrade() {
+                            match result {
+                                Ok(mut result) => {
+                                    let apply_result = {
+                                        let mut s = store.borrow_mut();
+                                        if let Some(snapshot) = result.downloaded.take() {
+                                            crate::cloud_sync::apply_downloaded_snapshot(
+                                                &mut s, snapshot,
+                                            )
+                                        } else {
+                                            Ok(())
+                                        }
+                                        .map(|_| {
+                                            s.set_cloud_sync(result.config.clone());
+                                            s.save()
+                                        })
+                                    };
+                                    match apply_result {
+                                        Ok(Ok(())) => {
+                                            let s = store.borrow();
+                                            sync_sessions_to_model(&s, &sessions_model);
+                                            w.set_download_dir(s.download_dir().to_string().into());
+                                            crate::i18n::set_language(s.language());
+                                            crate::i18n::apply_to_slint();
+                                            w.set_lang_en(crate::i18n::is_en());
+                                            apply_cloud_config_to_window(&w, s.cloud_sync());
+                                            w.set_cloud_status(result.status.into());
+                                            w.set_cloud_password("".into());
+                                        }
+                                        Ok(Err(err)) | Err(err) => {
+                                            w.set_cloud_status(
+                                                format!(
+                                                    "{}: {err:#}",
+                                                    t(
+                                                        "保存同步数据失败",
+                                                        "Failed to save synced data"
+                                                    )
+                                                )
+                                                .into(),
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(err) => w.set_cloud_status(err.into()),
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    );
+    Box::leak(Box::new(timer));
+}
+
+fn start_cloud_auto_sync(
+    store: Rc<RefCell<ConfigStore>>,
+    runtime: Arc<Runtime>,
+    tx: mpsc::Sender<CloudUiEvent>,
+    busy: Rc<Cell<bool>>,
+) {
+    let last_attempt = Rc::new(RefCell::new(std::time::Instant::now()));
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(30),
+        move || {
+            let (cfg, snapshot) = {
+                let s = store.borrow();
+                (s.cloud_sync().clone(), s.snapshot())
+            };
+            if !cfg.auto_sync || cfg.username.is_empty() || cfg.token_key.is_empty() {
+                return;
+            }
+            let interval = std::time::Duration::from_secs(cfg.interval_minutes.max(1) * 60);
+            if last_attempt.borrow().elapsed() < interval || busy.get() {
+                return;
+            }
+            *last_attempt.borrow_mut() = std::time::Instant::now();
+            busy.set(true);
+            let _ = tx.send(CloudUiEvent::Status(
+                t("正在自动同步...", "Auto syncing...").to_string(),
+            ));
+            launch_cloud_sync(&runtime, tx.clone(), cfg, snapshot, None);
+        },
+    );
+    Box::leak(Box::new(timer));
+}
+
+fn launch_cloud_login(
+    runtime: &Arc<Runtime>,
+    tx: mpsc::Sender<CloudUiEvent>,
+    cfg: CloudSyncConfig,
+    password: String,
+) {
+    runtime.spawn(async move {
+        let progress_tx = tx.clone();
+        let result = crate::cloud_sync::login(cfg, password, move |status| {
+            let _ = progress_tx.send(CloudUiEvent::Status(status));
+        })
+        .await
+        .map_err(|err| format!("{}: {err:#}", t("登录失败", "Login failed")));
+        let _ = tx.send(CloudUiEvent::LoginFinished(result));
+    });
+}
+
+fn launch_cloud_sync(
+    runtime: &Arc<Runtime>,
+    tx: mpsc::Sender<CloudUiEvent>,
+    cfg: CloudSyncConfig,
+    snapshot: crate::config::ConfigFile,
+    password: Option<String>,
+) {
+    runtime.spawn(async move {
+        let progress_tx = tx.clone();
+        let result = crate::cloud_sync::sync_now(cfg, snapshot, password, move |status| {
+            let _ = progress_tx.send(CloudUiEvent::Status(status));
+        })
+        .await
+        .map_err(|err| format!("{}: {err:#}", t("同步失败", "Sync failed")));
+        let _ = tx.send(CloudUiEvent::SyncFinished(result));
+    });
+}
+
+fn cloud_provider_from_str(value: &str) -> CloudProvider {
+    CloudProvider::from_str(value)
+}
+
+fn parse_sync_interval(value: &str) -> u64 {
+    value.trim().parse::<u64>().unwrap_or(15).max(1)
+}
+
+fn format_sync_time(timestamp_millis: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_millis)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -599,7 +997,9 @@ fn wire_session_callbacks(
             let mut added = 0usize;
             if hosts.is_empty() {
                 if let Some(w) = weak.upgrade() {
-                    w.set_ssh_import_hint(t("未找到 ~/.ssh/config", "no ~/.ssh/config found").into());
+                    w.set_ssh_import_hint(
+                        t("未找到 ~/.ssh/config", "no ~/.ssh/config found").into(),
+                    );
                 }
                 return;
             }
@@ -608,9 +1008,10 @@ fn wire_session_callbacks(
                 for h in hosts {
                     // Skip if a session already has this alias, or the same
                     // host + user pair.
-                    let dup = s.sessions().iter().any(|x| {
-                        x.name == h.alias || (x.host == h.hostname && x.user == h.user)
-                    });
+                    let dup = s
+                        .sessions()
+                        .iter()
+                        .any(|x| x.name == h.alias || (x.host == h.hostname && x.user == h.user));
                     if dup {
                         continue;
                     }
@@ -624,7 +1025,11 @@ fn wire_session_callbacks(
                         name: h.alias,
                         host: h.hostname,
                         port: h.port,
-                        user: if h.user.is_empty() { "root".into() } else { h.user },
+                        user: if h.user.is_empty() {
+                            "root".into()
+                        } else {
+                            h.user
+                        },
                         auth,
                         password: Secret::default(),
                         private_key_path: h.identity_file,
@@ -656,7 +1061,9 @@ fn wire_session_callbacks(
         window.on_edit_session(move |id: SharedString| {
             let id = id.to_string();
             let store = store.borrow();
-            let Some(session) = store.get(&id) else { return; };
+            let Some(session) = store.get(&id) else {
+                return;
+            };
             if let Some(w) = weak.upgrade() {
                 w.set_dialog_id(session.id.clone().into());
                 w.set_dialog_name(session.name.clone().into());
@@ -723,7 +1130,11 @@ fn wire_session_callbacks(
                     draft.name.to_string()
                 },
                 host: draft.host.to_string(),
-                port: if draft.port <= 0 { 22 } else { draft.port as u16 },
+                port: if draft.port <= 0 {
+                    22
+                } else {
+                    draft.port as u16
+                },
                 user: draft.user.to_string(),
                 auth: AuthMethod::from_str(&draft.auth.to_string()),
                 password,
@@ -761,7 +1172,8 @@ fn wire_session_callbacks(
     {
         let weak = window.as_weak();
         window.on_session_dialog_pick_key(move || {
-            let mut dialog = rfd::FileDialog::new().set_title(t("选择私钥文件", "Choose private key file"));
+            let mut dialog =
+                rfd::FileDialog::new().set_title(t("选择私钥文件", "Choose private key file"));
             // Start in ~/.ssh if it exists.
             if let Some(home) = directories::UserDirs::new().map(|u| u.home_dir().join(".ssh")) {
                 if home.is_dir() {
@@ -831,14 +1243,12 @@ fn wire_session_callbacks(
                 find_matches: ModelRc::from(std::rc::Rc::new(VecModel::<TermMatch>::default())),
                 selection: ModelRc::from(std::rc::Rc::new(VecModel::<TermMatch>::default())),
                 sftp_path: "/".into(),
-                sftp_entries: ModelRc::from(
-                    std::rc::Rc::new(VecModel::<SftpEntry>::default()),
-                ),
+                sftp_entries: ModelRc::from(std::rc::Rc::new(VecModel::<SftpEntry>::default())),
                 sftp_status: t("SFTP 连接中...", "SFTP connecting...").into(),
                 sftp_loading: true,
-                sftp_tree_nodes: ModelRc::from(
-                    std::rc::Rc::new(VecModel::<SftpTreeNode>::default()),
-                ),
+                sftp_tree_nodes: ModelRc::from(std::rc::Rc::new(
+                    VecModel::<SftpTreeNode>::default(),
+                )),
             });
             // Create vt100 parser for this tab (default 24×80; resized on first
             // terminal-resize callback). 5000-line scrollback is stored for
@@ -857,7 +1267,10 @@ fn wire_session_callbacks(
                 },
             );
             // Start in cd-auto-follow mode (flag = false → follow cd).
-            sftp_manual_nav.lock().unwrap().insert(tab_id.clone(), false);
+            sftp_manual_nav
+                .lock()
+                .unwrap()
+                .insert(tab_id.clone(), false);
             if let Some(w) = weak.upgrade() {
                 w.set_active_tab_id(tab_id.clone().into());
             }
@@ -894,7 +1307,10 @@ fn wire_session_callbacks(
                 // and merge them in the pump thread below.
                 let (sftp_tx, sftp_rx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
                 let sftp_handle = spawn_sftp(runtime.handle(), session, sftp_tx);
-                sftp_handles.lock().unwrap().insert(tab_id.clone(), sftp_handle);
+                sftp_handles
+                    .lock()
+                    .unwrap()
+                    .insert(tab_id.clone(), sftp_handle);
                 sftp_rx
             };
 
@@ -931,9 +1347,9 @@ fn wire_session_callbacks(
                                         let sftp_h = sftp_handles_pump.clone();
                                         let tid = tab_id_pump.clone();
                                         cwd_debounce = Some(rt_pump.spawn(async move {
-                                            tokio::time::sleep(
-                                                std::time::Duration::from_millis(500),
-                                            )
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ))
                                             .await;
                                             if let Ok(handles) = sftp_h.lock() {
                                                 if let Some(h) = handles.get(&tid) {
@@ -952,8 +1368,8 @@ fn wire_session_callbacks(
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(win) = weak_evt.upgrade() {
                                         apply_session_event_to_window(
-                                            &win, &tid, shell_evt, &bufs_evt,
-                                            &st_evt, &lc_evt, &nh_evt,
+                                            &win, &tid, shell_evt, &bufs_evt, &st_evt, &lc_evt,
+                                            &nh_evt,
                                         );
                                     }
                                 });
@@ -989,8 +1405,7 @@ fn wire_session_callbacks(
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(win) = weak_s.upgrade() {
                                         apply_session_event_to_window(
-                                            &win, &tid, sftp_evt, &bufs_s,
-                                            &st_s, &lc_s, &nh_s,
+                                            &win, &tid, sftp_evt, &bufs_s, &st_s, &lc_s, &nh_s,
                                         );
                                     }
                                 });
@@ -1089,13 +1504,29 @@ fn selection_rects(sr: u16, sc: u16, er: u16, ec: u16, cols: u16) -> Vec<TermMat
     if sr == er {
         let lo = sc.min(ec);
         let hi = sc.max(ec);
-        out.push(TermMatch { row: sr as i32, col: lo as i32, len: (hi - lo + 1) as i32 });
+        out.push(TermMatch {
+            row: sr as i32,
+            col: lo as i32,
+            len: (hi - lo + 1) as i32,
+        });
     } else {
-        out.push(TermMatch { row: sr as i32, col: sc as i32, len: (cols - sc) as i32 });
+        out.push(TermMatch {
+            row: sr as i32,
+            col: sc as i32,
+            len: (cols - sc) as i32,
+        });
         for r in (sr + 1)..er {
-            out.push(TermMatch { row: r as i32, col: 0, len: cols as i32 });
+            out.push(TermMatch {
+                row: r as i32,
+                col: 0,
+                len: cols as i32,
+            });
         }
-        out.push(TermMatch { row: er as i32, col: 0, len: (ec + 1) as i32 });
+        out.push(TermMatch {
+            row: er as i32,
+            col: 0,
+            len: (ec + 1) as i32,
+        });
     }
     out
 }
@@ -1139,7 +1570,9 @@ fn extract_selection(rows: &[String], sr: u16, sc: u16, er: u16, ec: u16) -> Str
 fn rebuild_tab_display(win: &AppWindow, bufs: &TermBuffers, tab_id: &str) {
     let data = {
         let mut map = bufs.lock().unwrap();
-        let Some(buf) = map.get_mut(tab_id) else { return };
+        let Some(buf) = map.get_mut(tab_id) else {
+            return;
+        };
         let cols = buf.parser.screen().size().1;
         let b = buf.render(); // also refreshes buf.displayed_text
         let matches = compute_find_matches(&buf.displayed_text, &buf.find_query);
@@ -1255,8 +1688,7 @@ fn refresh_sidebar(
             win.set_net_top_history(normalized_model(&st.net_hist));
             win.set_net_show_selector(!st.net.is_empty());
             win.set_net_selected(name.into());
-            let ifaces: Vec<SharedString> =
-                st.net.iter().map(|e| e.0.clone().into()).collect();
+            let ifaces: Vec<SharedString> = st.net.iter().map(|e| e.0.clone().into()).collect();
             win.set_net_ifaces(ModelRc::from(Rc::new(VecModel::from(ifaces))));
             win.set_disks(disk_model(&st.disks));
         }
@@ -1392,7 +1824,9 @@ fn apply_session_event_to_window(
         }
         SessionEvent::Closed(reason) => {
             update_tab(&|t| t.connected = false);
-            update_terminal(&|t| t.status = format!("{} — {reason}", crate::i18n::t("已断开", "Disconnected")).into());
+            update_terminal(&|t| {
+                t.status = format!("{} — {reason}", crate::i18n::t("已断开", "Disconnected")).into()
+            });
             if let Some(st) = statuses.lock().unwrap().get_mut(tab_id) {
                 st.state = 2;
             }
@@ -1454,9 +1888,7 @@ fn apply_session_event_to_window(
                     modified: format_mtime(e.modified).into(),
                 })
                 .collect();
-            let model = ModelRc::from(
-                std::rc::Rc::new(VecModel::from(slint_entries)),
-            );
+            let model = ModelRc::from(std::rc::Rc::new(VecModel::from(slint_entries)));
             update_terminal(&|t| {
                 t.sftp_path = path.clone().into();
                 t.sftp_entries = model.clone();
@@ -1712,23 +2144,21 @@ fn wire_sftp_callbacks(
     // Upload a local file into the current remote directory.
     {
         let sftp_handles = sftp_handles.clone();
-        window.on_sftp_upload_clicked(
-            move |tab_id: SharedString, remote_dir: SharedString| {
-                let tab_id = tab_id.to_string();
-                let remote_dir = remote_dir.to_string();
-                let sftp_handles = sftp_handles.clone();
-                std::thread::spawn(move || {
-                    if let Some(file) = rfd::FileDialog::new().pick_file() {
-                        let local = file.to_string_lossy().to_string();
-                        if let Ok(handles) = sftp_handles.lock() {
-                            if let Some(h) = handles.get(&tab_id) {
-                                h.upload(local, remote_dir);
-                            }
+        window.on_sftp_upload_clicked(move |tab_id: SharedString, remote_dir: SharedString| {
+            let tab_id = tab_id.to_string();
+            let remote_dir = remote_dir.to_string();
+            let sftp_handles = sftp_handles.clone();
+            std::thread::spawn(move || {
+                if let Some(file) = rfd::FileDialog::new().pick_file() {
+                    let local = file.to_string_lossy().to_string();
+                    if let Ok(handles) = sftp_handles.lock() {
+                        if let Some(h) = handles.get(&tab_id) {
+                            h.upload(local, remote_dir);
                         }
                     }
-                });
-            },
-        );
+                }
+            });
+        });
     }
 
     // Refresh the current directory listing.
@@ -1815,8 +2245,7 @@ fn wire_key_input(
         let bufs = bufs.clone();
         // Shared timestamp: the last time the Shift key alone was pressed
         // (key="", shift=true).  Used by the time-based Backspace filter below.
-        let last_shift_time: Arc<Mutex<Option<std::time::Instant>>> =
-            Arc::new(Mutex::new(None));
+        let last_shift_time: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         window.on_send_key(move |tab_id: SharedString, key: SharedString, ctrl: bool, alt: bool, shift: bool| {
             // Check whether the remote PTY switched to application cursor mode
             // (DECCKM, set by nano/vim via \x1b[?1h). In that mode the terminal
@@ -2041,17 +2470,14 @@ fn wire_key_input(
     {
         let handles = handles.clone();
         let bufs_resize = bufs.clone(); // keep bufs alive for the copy handler below
-        // The Slint side now measures the real Consolas cell size (via a hidden
-        // probe Text) and passes whole column/row counts directly, so there is
-        // no pixel→cell guesswork here.  This keeps full-screen programs like
-        // nano from over-counting rows and clipping their bottom shortcut bar.
+                                        // The Slint side now measures the real Consolas cell size (via a hidden
+                                        // probe Text) and passes whole column/row counts directly, so there is
+                                        // no pixel→cell guesswork here.  This keeps full-screen programs like
+                                        // nano from over-counting rows and clipping their bottom shortcut bar.
         window.on_terminal_resize(move |tab_id: SharedString, cols_f: f32, rows_f: f32| {
             let cols = (cols_f as u32).max(10);
             let rows = (rows_f as u32).max(5);
-            tracing::debug!(
-                "terminal_resize tab={} cols={} rows={}",
-                tab_id, cols, rows
-            );
+            tracing::debug!("terminal_resize tab={} cols={} rows={}", tab_id, cols, rows);
             // Keep the shared size up-to-date so future connections start
             // with the correct PTY dimensions.
             *last_term_size.lock().unwrap() = (cols, rows);
@@ -2169,12 +2595,9 @@ fn wire_key_input(
             }
             if let Some(win) = weak.upgrade() {
                 set_terminal_row(&win, &tid, |row| {
-                    row.spans =
-                        ModelRc::from(Rc::new(VecModel::<TermSpan>::default()));
-                    row.find_matches =
-                        ModelRc::from(Rc::new(VecModel::<TermMatch>::default()));
-                    row.selection =
-                        ModelRc::from(Rc::new(VecModel::<TermMatch>::default()));
+                    row.spans = ModelRc::from(Rc::new(VecModel::<TermSpan>::default()));
+                    row.find_matches = ModelRc::from(Rc::new(VecModel::<TermMatch>::default()));
+                    row.selection = ModelRc::from(Rc::new(VecModel::<TermMatch>::default()));
                     row.cursor_row = 0;
                     row.cursor_col = 0;
                     row.rows_used = 0;
@@ -2295,8 +2718,7 @@ fn wire_key_input(
                 Some(t) if !t.is_empty() => {
                     // Auto-copy on release (select-to-copy, PuTTY style).
                     std::thread::spawn(move || {
-                        let _ = arboard::Clipboard::new()
-                            .and_then(|mut cb| cb.set_text(t));
+                        let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(t));
                     });
                 }
                 _ => {}
@@ -2326,7 +2748,9 @@ fn wire_key_input(
                 let last = rows.saturating_sub(1);
                 let max_off = buf.history.len();
                 let step = 2usize;
-                let Some((sr, sc, _er, ec)) = buf.sel else { return };
+                let Some((sr, sc, _er, ec)) = buf.sel else {
+                    return;
+                };
                 if dir < 0 {
                     // Mouse above the top → reveal older lines.
                     let new_off = (buf.view_offset + step).min(max_off);
@@ -2392,23 +2816,23 @@ fn key_to_pty_bytes(key: &str, ctrl: bool, alt: bool, app_cursor: bool) -> Vec<u
         "\u{F701}" => Some(if app_cursor { b"\x1bOB" } else { b"\x1b[B" }), // Down
         "\u{F702}" => Some(if app_cursor { b"\x1bOD" } else { b"\x1b[D" }), // Left
         "\u{F703}" => Some(if app_cursor { b"\x1bOC" } else { b"\x1b[C" }), // Right
-        "\u{F729}" => Some(b"\x1b[H"),   // Home
-        "\u{F72B}" => Some(b"\x1b[F"),   // End
-        "\u{F72C}" => Some(b"\x1b[5~"),  // PageUp
-        "\u{F72D}" => Some(b"\x1b[6~"),  // PageDown
-        "\u{F728}" => Some(b"\x1b[3~"),  // Delete (forward)
-        "\u{F704}" => Some(b"\x1bOP"),   // F1
-        "\u{F705}" => Some(b"\x1bOQ"),   // F2
-        "\u{F706}" => Some(b"\x1bOR"),   // F3
-        "\u{F707}" => Some(b"\x1bOS"),   // F4
-        "\u{F708}" => Some(b"\x1b[15~"), // F5
-        "\u{F709}" => Some(b"\x1b[17~"), // F6
-        "\u{F70A}" => Some(b"\x1b[18~"), // F7
-        "\u{F70B}" => Some(b"\x1b[19~"), // F8
-        "\u{F70C}" => Some(b"\x1b[20~"), // F9
-        "\u{F70D}" => Some(b"\x1b[21~"), // F10
-        "\u{F70E}" => Some(b"\x1b[23~"), // F11
-        "\u{F70F}" => Some(b"\x1b[24~"), // F12
+        "\u{F729}" => Some(b"\x1b[H"),                                      // Home
+        "\u{F72B}" => Some(b"\x1b[F"),                                      // End
+        "\u{F72C}" => Some(b"\x1b[5~"),                                     // PageUp
+        "\u{F72D}" => Some(b"\x1b[6~"),                                     // PageDown
+        "\u{F728}" => Some(b"\x1b[3~"),                                     // Delete (forward)
+        "\u{F704}" => Some(b"\x1bOP"),                                      // F1
+        "\u{F705}" => Some(b"\x1bOQ"),                                      // F2
+        "\u{F706}" => Some(b"\x1bOR"),                                      // F3
+        "\u{F707}" => Some(b"\x1bOS"),                                      // F4
+        "\u{F708}" => Some(b"\x1b[15~"),                                    // F5
+        "\u{F709}" => Some(b"\x1b[17~"),                                    // F6
+        "\u{F70A}" => Some(b"\x1b[18~"),                                    // F7
+        "\u{F70B}" => Some(b"\x1b[19~"),                                    // F8
+        "\u{F70C}" => Some(b"\x1b[20~"),                                    // F9
+        "\u{F70D}" => Some(b"\x1b[21~"),                                    // F10
+        "\u{F70E}" => Some(b"\x1b[23~"),                                    // F11
+        "\u{F70F}" => Some(b"\x1b[24~"),                                    // F12
         _ => None,
     };
     if let Some(seq) = special {
@@ -2455,8 +2879,8 @@ fn key_to_pty_bytes(key: &str, ctrl: bool, alt: bool, app_cursor: bool) -> Vec<u
             if key.chars().count() == 1 {
                 let upper = c.to_ascii_uppercase() as u8;
                 let ctrl_char: Option<u8> = match upper {
-                    b'A'..=b'Z' => Some(upper - b'A' + 1),      // Ctrl+A=\x01 … Ctrl+Z=\x1A
-                    b'[' => Some(0x1b),                           // Ctrl+[ = ESC
+                    b'A'..=b'Z' => Some(upper - b'A' + 1), // Ctrl+A=\x01 … Ctrl+Z=\x1A
+                    b'[' => Some(0x1b),                    // Ctrl+[ = ESC
                     b'\\' => Some(0x1c),
                     b']' => Some(0x1d),
                     b'^' => Some(0x1e),
@@ -2703,7 +3127,11 @@ impl TermBuffer {
                     } else {
                         // Not a CSI (could be another ESC, OSC, etc.).  Re-arm on
                         // a fresh ESC, otherwise fall back to normal text.
-                        self.csi_state = if b == 0x1b { CsiState::Esc } else { CsiState::Normal };
+                        self.csi_state = if b == 0x1b {
+                            CsiState::Esc
+                        } else {
+                            CsiState::Normal
+                        };
                     }
                     out.push(b);
                 }
@@ -2730,9 +3158,9 @@ impl TermBuffer {
         // btop configured with `alt-screen = false`).
         // We look for \033[H (cursor-home) and \033[2J / \033[J (erase display)
         // as indicators that the program is doing a full-screen refresh.
-        let has_cursor_home   = bytes.windows(3).any(|w| w == b"\x1b[H");
-        let has_erase_display = bytes.windows(4).any(|w| w == b"\x1b[2J")
-                             || bytes.windows(3).any(|w| w == b"\x1b[J");
+        let has_cursor_home = bytes.windows(3).any(|w| w == b"\x1b[H");
+        let has_erase_display =
+            bytes.windows(4).any(|w| w == b"\x1b[2J") || bytes.windows(3).any(|w| w == b"\x1b[J");
         let is_fullscreen_refresh = has_cursor_home && has_erase_display;
 
         self.parser.process(bytes);
@@ -2808,7 +3236,11 @@ impl TermBuffer {
                 displayed.push(plain.trim_end().to_string());
             }
             self.displayed_text = displayed;
-            let rows_used = if is_alt { rows as i32 } else { last_content + 1 };
+            let rows_used = if is_alt {
+                rows as i32
+            } else {
+                last_content + 1
+            };
             return BuiltScreen {
                 spans,
                 cursor_row: cur_row as i32,

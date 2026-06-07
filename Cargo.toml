@@ -41,6 +41,14 @@ zeroize = "1"
 # (HTTP CONNECT proxies are handled in src/proxy.rs without an extra crate.)
 tokio-socks = "0.5"
 base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+urlencoding = "2"
+webbrowser = "1"
+sha2 = "0.10"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [build-dependencies]
 slint-build = "1.8"

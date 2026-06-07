@@ -44,7 +44,11 @@ impl Drop for Secret {
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Never reveal the contents in logs / debug output.
-        f.write_str(if self.0.is_empty() { "Secret(\"\")" } else { "Secret(***)" })
+        f.write_str(if self.0.is_empty() {
+            "Secret(\"\")"
+        } else {
+            "Secret(***)"
+        })
     }
 }
 
@@ -122,6 +126,100 @@ impl Session {
     }
 }
 
+/// Browser-login sync provider.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudProvider {
+    Github,
+    Gitea,
+}
+
+impl CloudProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CloudProvider::Github => "github",
+            CloudProvider::Gitea => "gitea",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            CloudProvider::Github => "GitHub",
+            CloudProvider::Gitea => "Gitea",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "gitea" => CloudProvider::Gitea,
+            _ => CloudProvider::Github,
+        }
+    }
+}
+
+/// Non-secret sync settings. OAuth tokens and the sync password live in the
+/// OS credential store under the key names below; the remote repository only
+/// receives password-encrypted snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSyncConfig {
+    #[serde(default = "default_cloud_provider")]
+    pub provider: CloudProvider,
+    #[serde(default = "default_gitea_server")]
+    pub server_url: String,
+    #[serde(default = "default_sync_repo")]
+    pub repo_name: String,
+    #[serde(default)]
+    pub repo_owner: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub auto_sync: bool,
+    #[serde(default = "default_sync_interval_minutes")]
+    pub interval_minutes: u64,
+    #[serde(default)]
+    pub last_synced_at: i64,
+    #[serde(default)]
+    pub token_key: String,
+    #[serde(default)]
+    pub password_key: String,
+    #[serde(default)]
+    pub client_id: String,
+}
+
+fn default_cloud_provider() -> CloudProvider {
+    CloudProvider::Gitea
+}
+
+fn default_gitea_server() -> String {
+    "https://gitea.com".to_string()
+}
+
+fn default_sync_repo() -> String {
+    "meatshell-sync".to_string()
+}
+
+fn default_sync_interval_minutes() -> u64 {
+    15
+}
+
+impl Default for CloudSyncConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_cloud_provider(),
+            server_url: default_gitea_server(),
+            repo_name: default_sync_repo(),
+            repo_owner: String::new(),
+            username: String::new(),
+            auto_sync: false,
+            interval_minutes: default_sync_interval_minutes(),
+            last_synced_at: 0,
+            token_key: String::new(),
+            password_key: String::new(),
+            client_id: String::new(),
+        }
+    }
+}
+
 /// On-disk layout. Keep additive to ease forward-compat.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigFile {
@@ -133,6 +231,9 @@ pub struct ConfigFile {
     /// UI language code: "zh" (default) or "en".
     #[serde(default)]
     pub language: String,
+    /// Optional GitHub/Gitea private-repository sync settings.
+    #[serde(default)]
+    pub cloud_sync: CloudSyncConfig,
 }
 
 pub struct ConfigStore {
@@ -147,9 +248,8 @@ impl ConfigStore {
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create config dir {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create config dir {}", parent.display()))?;
         }
 
         let cache = if path.exists() {
@@ -180,6 +280,12 @@ impl ConfigStore {
         Ok(dirs.config_dir().join("sessions.json"))
     }
 
+    pub fn synced_keys_dir() -> Result<PathBuf> {
+        let dirs = ProjectDirs::from("dev", "meatshell", "meatshell")
+            .context("could not determine user config directory")?;
+        Ok(dirs.config_dir().join("synced_keys"))
+    }
+
     pub fn sessions(&self) -> &[Session] {
         &self.cache.sessions
     }
@@ -190,12 +296,7 @@ impl ConfigStore {
     }
 
     pub fn upsert(&mut self, session: Session) {
-        if let Some(existing) = self
-            .cache
-            .sessions
-            .iter_mut()
-            .find(|s| s.id == session.id)
-        {
+        if let Some(existing) = self.cache.sessions.iter_mut().find(|s| s.id == session.id) {
             *existing = session;
         } else {
             self.cache.sessions.push(session);
@@ -231,13 +332,35 @@ impl ConfigStore {
         self.cache.language = lang;
     }
 
+    pub fn cloud_sync(&self) -> &CloudSyncConfig {
+        &self.cache.cloud_sync
+    }
+
+    pub fn set_cloud_sync(&mut self, cfg: CloudSyncConfig) {
+        self.cache.cloud_sync = cfg;
+    }
+
+    pub fn snapshot(&self) -> ConfigFile {
+        self.cache.clone()
+    }
+
+    pub fn replace_synced_data(
+        &mut self,
+        sessions: Vec<Session>,
+        download_dir: String,
+        language: String,
+    ) {
+        self.cache.sessions = sessions;
+        self.cache.download_dir = download_dir;
+        self.cache.language = language;
+    }
+
     pub fn save(&self) -> Result<()> {
         let raw = serde_json::to_string_pretty(&self.cache)?;
         // Write to a sibling temp file then rename — cheap atomicity on most
         // platforms. Good enough for a config file.
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, raw)
-            .with_context(|| format!("failed to write {}", tmp.display()))?;
+        fs::write(&tmp, raw).with_context(|| format!("failed to write {}", tmp.display()))?;
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("failed to finalise {}", self.path.display()))?;
         Ok(())

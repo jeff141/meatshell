@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod cloud_sync;
 mod config;
 mod i18n;
 mod proxy;

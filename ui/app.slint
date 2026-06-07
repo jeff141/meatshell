@@ -88,6 +88,7 @@ export component AppWindow inherits Window {
     in-out property <bool> download-open: false;  // download manager popup
     in-out property <bool> settings-open: false;  // settings menu popup
     in-out property <bool> about-open: false;     // centered About dialog
+    in-out property <bool> sync-open: false;      // cloud sync dialog
     in property <string> download-dir;      // preset SFTP download folder ("" = ask)
     in property <[TransferInfo]> transfers; // download/upload records (newest first)
     in property <[string]> about-libs;      // open-source libraries used
@@ -97,6 +98,21 @@ export component AppWindow inherits Window {
     callback open-download-dir();            // reveal the folder in the OS
     callback clear-transfers();              // wipe the transfer history
     callback set-language(string);           // switch UI language ("zh" / "en")
+
+    // --- Cloud sync settings ---------------------------------------------
+    in-out property <string> cloud-provider: "gitea";
+    in-out property <string> cloud-server: "https://gitea.com";
+    in-out property <string> cloud-repo: "meatshell-sync";
+    in-out property <string> cloud-password;
+    in-out property <bool> cloud-auto-sync: false;
+    in-out property <string> cloud-sync-interval: "15";
+    in property <string> cloud-status;
+    in property <string> cloud-username;
+    in property <bool> cloud-logged-in: false;
+    callback cloud-save-settings(string, string, string, bool, string);
+    callback cloud-login(string, string, string, string, bool, string);
+    callback cloud-sync-now(string, string, string, string, bool, string);
+    callback cloud-disconnect();
 
     // --- Session list ------------------------------------------------------
     in property <[SessionInfo]> sessions;
@@ -519,7 +535,7 @@ export component AppWindow inherits Window {
         x: parent.width - 196px;
         y: 40px;
         width: 198px;
-        height: 104px;
+        height: 136px;
         visible: root.settings-open;
         background: Theme.bg-panel;
         border-radius: Theme.radius-md;
@@ -572,6 +588,27 @@ export component AppWindow inherits Window {
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            vertical-alignment: center; }
                     Text { text: root.lang-en ? "切换到中文" : "Switch to English";
+                           color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: sync-ta.has-hover ? Theme.bg-hover : transparent;
+                sync-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.settings-open = false;
+                        root.sync-open = true;
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 8px; spacing: 8px;
+                    Text { text: "\u{E627}"; font-family: "Material Icons"; // sync
+                           color: Theme.text-secondary; font-size: Theme.fs-sm;
+                           vertical-alignment: center; }
+                    Text { text: root.lang-en ? "Sync settings" : "同步设置";
                            color: Theme.text-primary; font-size: Theme.fs-md;
                            vertical-alignment: center; horizontal-stretch: 1; }
                 }
@@ -683,6 +720,286 @@ export component AppWindow inherits Window {
                             wrap: no-wrap;
                             overflow: elide;
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Cloud sync dialog ------------------------------------------------
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        visible: root.sync-open;
+        background: #00000080;
+        TouchArea { clicked => { root.sync-open = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 40px, 480px);
+            height: min(parent.height - 40px, 560px);
+            background: Theme.bg-panel;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #000000a0;
+
+            TouchArea {}
+
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    Text {
+                        text: root.lang-en ? "Sync settings" : "同步设置";
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-lg;
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: 22px; height: 22px;
+                        border-radius: Theme.radius-sm;
+                        background: sync-close-ta.has-hover ? Theme.bg-hover : transparent;
+                        sync-close-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.sync-open = false; }
+                        }
+                        Text { text: "\u{E5CD}"; font-family: "Material Icons";
+                               color: Theme.text-secondary; font-size: Theme.fs-sm;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        height: 30px;
+                        horizontal-stretch: 1;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: root.cloud-provider == "gitea" ? Theme.accent : Theme.border-subtle;
+                        background: root.cloud-provider == "gitea" ? Theme.bg-active : (gitea-ta.has-hover ? Theme.bg-hover : Theme.bg-root);
+                        gitea-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.cloud-provider = "gitea";
+                                if root.cloud-server == "" || root.cloud-server == "https://github.com" {
+                                    root.cloud-server = "https://gitea.com";
+                                }
+                            }
+                        }
+                        Text { text: "Gitea"; color: Theme.text-primary; font-size: Theme.fs-md;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        height: 30px;
+                        horizontal-stretch: 1;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: root.cloud-provider == "github" ? Theme.accent : Theme.border-subtle;
+                        background: root.cloud-provider == "github" ? Theme.bg-active : (github-ta.has-hover ? Theme.bg-hover : Theme.bg-root);
+                        github-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.cloud-provider = "github";
+                                root.cloud-server = "https://github.com";
+                            }
+                        }
+                        Text { text: "GitHub"; color: Theme.text-primary; font-size: Theme.fs-md;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+
+                Text {
+                    text: root.cloud-logged-in
+                        ? (root.lang-en ? "Signed in as " : "已登录：") + root.cloud-username
+                        : (root.lang-en ? "Not signed in" : "未登录");
+                    color: root.cloud-logged-in ? Theme.success : Theme.text-muted;
+                    font-size: Theme.fs-sm;
+                    overflow: elide;
+                }
+
+                Text { text: root.lang-en ? "Server" : "服务器"; color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                Rectangle {
+                    height: 32px;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: sync-server-input.has-focus ? Theme.accent : Theme.border-subtle;
+                    background: root.cloud-provider == "github" ? Theme.bg-elevated : Theme.bg-root;
+                    sync-server-input := TextInput {
+                        x: 10px; y: 0px; width: parent.width - 20px; height: parent.height;
+                        enabled: root.cloud-provider != "github";
+                        text <=> root.cloud-server;
+                        color: root.cloud-provider == "github" ? Theme.text-muted : Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        single-line: true;
+                    }
+                }
+
+                Text { text: root.lang-en ? "Private repository" : "私有仓库"; color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                Rectangle {
+                    height: 32px;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: sync-repo-input.has-focus ? Theme.accent : Theme.border-subtle;
+                    background: Theme.bg-root;
+                    sync-repo-input := TextInput {
+                        x: 10px; y: 0px; width: parent.width - 20px; height: parent.height;
+                        text <=> root.cloud-repo;
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        single-line: true;
+                    }
+                }
+
+                Text { text: root.lang-en ? "Sync password" : "同步密码"; color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                Rectangle {
+                    height: 32px;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: sync-pass-input.has-focus ? Theme.accent : Theme.border-subtle;
+                    background: Theme.bg-root;
+                    sync-pass-input := TextInput {
+                        x: 10px; y: 0px; width: parent.width - 20px; height: parent.height;
+                        text <=> root.cloud-password;
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        single-line: true;
+                        input-type: InputType.password;
+                    }
+                    if root.cloud-password == "" : Text {
+                        x: 10px; y: 0px; height: parent.height;
+                        text: root.lang-en ? "Required for first login or password change" : "首次登录或更换密码时填写";
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        width: 22px; height: 22px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        background: root.cloud-auto-sync ? Theme.accent : Theme.bg-root;
+                        auto-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.cloud-auto-sync = !root.cloud-auto-sync; }
+                        }
+                        Text { text: root.cloud-auto-sync ? "\u{E5CA}" : "";
+                               font-family: "Material Icons"; color: #ffffff; font-size: Theme.fs-sm;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: root.lang-en ? "Auto sync every" : "自动同步间隔";
+                           color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; }
+                    Rectangle {
+                        width: 64px; height: 30px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: sync-interval-input.has-focus ? Theme.accent : Theme.border-subtle;
+                        background: Theme.bg-root;
+                        sync-interval-input := TextInput {
+                            x: 8px; y: 0px; width: parent.width - 16px; height: parent.height;
+                            text <=> root.cloud-sync-interval;
+                            color: Theme.text-primary;
+                            font-size: Theme.fs-md;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            single-line: true;
+                        }
+                    }
+                    Text { text: root.lang-en ? "minutes" : "分钟";
+                           color: Theme.text-primary; font-size: Theme.fs-md;
+                           vertical-alignment: center; horizontal-stretch: 1; }
+                }
+
+                Rectangle {
+                    height: 54px;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.bg-root;
+                    Text {
+                        x: 10px; y: 0px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text: root.cloud-status;
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                VerticalLayout {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 82px; height: 30px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        background: save-sync-ta.has-hover ? Theme.bg-hover : Theme.bg-panel;
+                        save-sync-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.cloud-save-settings(root.cloud-provider, root.cloud-server, root.cloud-repo, root.cloud-auto-sync, root.cloud-sync-interval);
+                            }
+                        }
+                        Text { text: root.lang-en ? "Save" : "保存"; color: Theme.text-primary; font-size: Theme.fs-md;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 82px; height: 30px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        background: logout-sync-ta.has-hover ? Theme.bg-hover : Theme.bg-panel;
+                        logout-sync-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.cloud-disconnect(); }
+                        }
+                        Text { text: root.lang-en ? "Sign out" : "退出"; color: Theme.text-primary; font-size: Theme.fs-md;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        width: 86px; height: 30px;
+                        border-radius: Theme.radius-sm;
+                        background: manual-sync-ta.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                        manual-sync-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.cloud-sync-now(root.cloud-provider, root.cloud-server, root.cloud-repo, root.cloud-password, root.cloud-auto-sync, root.cloud-sync-interval);
+                            }
+                        }
+                        Text { text: root.lang-en ? "Sync now" : "手动同步"; color: Theme.text-primary; font-size: Theme.fs-md;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 86px; height: 30px;
+                        border-radius: Theme.radius-sm;
+                        background: login-sync-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                        login-sync-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.cloud-login(root.cloud-provider, root.cloud-server, root.cloud-repo, root.cloud-password, root.cloud-auto-sync, root.cloud-sync-interval);
+                            }
+                        }
+                        Text { text: root.lang-en ? "Login" : "登录"; color: #ffffff; font-size: Theme.fs-md;
+                               font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
