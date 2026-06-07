@@ -191,3 +191,42 @@ msgstr "代理（可选）"
 
 msgid "Leave blank to use $ALL_PROXY or connect directly"
 msgstr "留空则用 $ALL_PROXY 环境变量，或直接连接"
+
+msgid "Connection type"
+msgstr "连接类型"
+
+msgid "Serial"
+msgstr "串口"
+
+msgid "Serial port"
+msgstr "串口号"
+
+msgid "Baud rate"
+msgstr "波特率"
+
+msgid "Data bits / Stop bits / Parity"
+msgstr "数据位 / 停止位 / 校验位"
+
+msgid "Flow control"
+msgstr "流控"
+
+msgid "None"
+msgstr "无"
+
+msgid "Hardware"
+msgstr "硬件"
+
+msgid "Software"
+msgstr "软件"
+
+msgid "Confirm delete"
+msgstr "确认删除"
+
+msgid "Delete this item? This cannot be undone."
+msgstr "确定删除此项？此操作不可撤销。"
+
+msgid "Please confirm"
+msgstr "请确认"
+
+msgid "Confirm"
+msgstr "确认"

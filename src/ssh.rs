@@ -399,7 +399,14 @@ async fn run_session(
     // it into CPU% / mem / swap for the sidebar.  Best-effort: if the channel
     // or exec fails (e.g. a non-Linux host without /proc), monitoring is
     // silently skipped and the interactive shell is unaffected.
-    const MON_CMD: &[u8] = b"while :; do awk '/^cpu /{print}' /proc/stat; awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/{print}' /proc/meminfo; cat /proc/net/dev; echo __DF__; df -kP 2>/dev/null; echo __MSTICK__; sleep 2; done\n";
+    // Reset PATH to the standard system directories first (#27): the monitor
+    // runs over an exec channel, so a server with a hijacked PATH (or a
+    // BASH_ENV pointing at a malicious file) could otherwise shadow awk/cat/df/
+    // sleep with arbitrary binaries. A fixed PATH covering /usr/bin and /bin is
+    // more portable than hardcoding one absolute path per tool (their location
+    // differs across distros). Monitoring is best-effort, so even if this shell
+    // is unusual and the reset finds nothing, only the sidebar stats are lost.
+    const MON_CMD: &[u8] = b"PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH; while :; do awk '/^cpu /{print}' /proc/stat; awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/{print}' /proc/meminfo; cat /proc/net/dev; echo __DF__; df -kP 2>/dev/null; echo __MSTICK__; sleep 2; done\n";
     let mut mon_channel = match handle.channel_open_session().await {
         Ok(ch) => match ch.exec(true, MON_CMD).await {
             Ok(()) => Some(ch),
@@ -504,6 +511,14 @@ async fn run_session(
                                 let _ = events.send(stats);
                             }
                         }
+                        // Bound the leftover (incomplete) tail: a server that
+                        // streams data but never emits the __MSTICK__ marker must
+                        // not grow this buffer without limit (memory DoS, #27).
+                        // A real sample is a few KiB; 1 MiB is a generous ceiling.
+                        const MON_BUF_CAP: usize = 1 << 20;
+                        if mon_buf.len() > MON_BUF_CAP {
+                            mon_buf.clear();
+                        }
                     }
                     Some(ChannelMsg::Close) | None => {
                         mon_channel = None;
@@ -546,14 +561,21 @@ fn parse_monitor_block(
     let mut disks: Vec<(String, u64, u64)> = Vec::new();
     let mut in_df = false;
 
+    // Cap how many interfaces / filesystems we accept from one sample so a
+    // hostile server can't flood the parser and sidebar with fabricated rows
+    // (#27). No real machine has anywhere near this many.
+    const MAX_MON_ENTRIES: usize = 64;
+
     for line in block.lines() {
         if line == "__DF__" {
             in_df = true;
             continue;
         }
         if in_df {
-            if let Some(d) = parse_df_line(line) {
-                disks.push(d);
+            if disks.len() < MAX_MON_ENTRIES {
+                if let Some(d) = parse_df_line(line) {
+                    disks.push(d);
+                }
             }
             continue;
         }
@@ -564,8 +586,10 @@ fn parse_monitor_block(
                 .collect();
             // user nice system idle iowait irq softirq steal ...
             if nums.len() >= 4 {
-                cpu_total = nums.iter().sum();
-                cpu_idle = nums[3] + nums.get(4).copied().unwrap_or(0); // idle + iowait
+                // Saturating arithmetic: a server can send arbitrary jiffy
+                // values, and a plain sum/add would panic on overflow in debug.
+                cpu_total = nums.iter().copied().fold(0u64, u64::saturating_add);
+                cpu_idle = nums[3].saturating_add(nums.get(4).copied().unwrap_or(0)); // idle + iowait
                 have_cpu = true;
             }
         } else if let Some(v) = line.strip_prefix("MemTotal:") {
@@ -576,8 +600,10 @@ fn parse_monitor_block(
             swap_total = parse_meminfo_kib(v);
         } else if let Some(v) = line.strip_prefix("SwapFree:") {
             swap_free = parse_meminfo_kib(v);
-        } else if let Some((iface, counters)) = parse_net_dev_line(line) {
-            net_now.push((iface, counters.0, counters.1));
+        } else if net_now.len() < MAX_MON_ENTRIES {
+            if let Some((iface, counters)) = parse_net_dev_line(line) {
+                net_now.push((iface, counters.0, counters.1));
+            }
         }
     }
 
@@ -651,7 +677,9 @@ fn parse_df_line(line: &str) -> Option<(String, u64, u64)> {
     }
     // Mount point is the last column (joined in case it contains spaces).
     let mount = f[5..].join(" ");
-    Some((mount, avail_kb * 1024, total_kb * 1024))
+    // Saturating: a server can report arbitrary block counts; KiB→bytes must
+    // not overflow-panic in debug (#27).
+    Some((mount, avail_kb.saturating_mul(1024), total_kb.saturating_mul(1024)))
 }
 
 /// Extract the leading integer (KiB) from a `/proc/meminfo` value like
@@ -714,4 +742,47 @@ impl Handler for ClientHandler {
 fn _assert_handle_send() {
     fn takes<T: Send>() {}
     takes::<Handle<ClientHandler>>();
+}
+
+#[cfg(test)]
+mod monitor_hardening_tests {
+    use super::{parse_df_line, parse_monitor_block};
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    #[test]
+    fn df_line_saturates_instead_of_overflowing() {
+        // avail/total near u64::MAX must not panic on the KiB->bytes multiply.
+        let line = "/dev/sda1 18446744073709551615 0 18446744073709551615 100% /";
+        let (_, avail, total) = parse_df_line(line).expect("parses");
+        assert_eq!(avail, u64::MAX);
+        assert_eq!(total, u64::MAX);
+    }
+
+    #[test]
+    fn cpu_overflow_values_do_not_panic() {
+        let big = u64::MAX;
+        let block = format!(
+            "cpu {big} {big} {big} {big} {big}\nMemTotal: 1000 kB\nMemAvailable: 500 kB"
+        );
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        // Must not panic; with no baseline the first sample reports 0% CPU.
+        assert!(parse_monitor_block(&block, &mut prev, &mut prev_net, &mut at).is_some());
+    }
+
+    #[test]
+    fn floods_of_fake_interfaces_are_capped() {
+        let mut block = String::from("MemTotal: 1000 kB\nMemAvailable: 500 kB\n");
+        for i in 0..500 {
+            block.push_str(&format!("eth{i}: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16\n"));
+        }
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        assert!(parse_monitor_block(&block, &mut prev, &mut prev_net, &mut at).is_some());
+        // The remembered interface set is capped, not 500.
+        assert!(prev_net.len() <= 64, "prev_net held {}", prev_net.len());
+    }
 }

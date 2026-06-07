@@ -7,10 +7,12 @@ mod app;
 mod config;
 mod i18n;
 mod proxy;
+mod serial;
 mod sftp;
 mod ssh;
 mod ssh_config;
 mod system;
+mod telnet;
 
 fn main() -> anyhow::Result<()> {
     // Initialise tracing — honour RUST_LOG but default to info.

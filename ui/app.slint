@@ -14,6 +14,7 @@ import { Sidebar, DiskInfo } from "sidebar.slint";
 import { TabBar, TabInfo } from "tabs.slint";
 import { Welcome, SessionInfo } from "welcome.slint";
 import { SessionDialog, SessionDraft } from "session_dialog.slint";
+import { ConfirmDialog } from "confirm_dialog.slint";
 import { TerminalView, TermSpan, TermMatch } from "terminal_view.slint";
 import { SftpEntry, SftpTreeNode } from "sftp_panel.slint";
 
@@ -126,6 +127,18 @@ export component AppWindow inherits Window {
     in-out property <string> dialog-password;
     in-out property <string> dialog-key-path;
     in-out property <string> dialog-proxy;
+    in-out property <string> dialog-kind: "ssh";
+    in-out property <string> dialog-serial-port;
+    in-out property <string> dialog-baud: "115200";
+    in-out property <string> dialog-data-bits: "8";
+    in-out property <string> dialog-stop-bits: "1";
+    in-out property <string> dialog-parity: "none";
+    in-out property <string> dialog-flow: "none";
+
+    // Delete-confirmation modal state (#28).
+    in-out property <bool> confirm-delete-open: false;
+    in-out property <string> confirm-delete-tab;
+    in-out property <string> confirm-delete-path;
 
     // --- Callbacks up to Rust ---------------------------------------------
     callback new-session-clicked();
@@ -273,7 +286,13 @@ export component AppWindow inherits Window {
                     sftp-upload-clicked(dir) => { root.sftp-upload-clicked(term.id, dir); }
                     sftp-refresh(path) => { root.sftp-refresh(term.id, path); }
                     sftp-tree-expand(path) => { root.sftp-tree-expand(term.id, path); }
-                    sftp-delete(path) => { root.sftp-delete(term.id, path); }
+                    // Gate delete behind an in-app confirmation (#28): stash the
+                    // target and open the modal; the real delete fires on confirm.
+                    sftp-delete(path) => {
+                        root.confirm-delete-tab = term.id;
+                        root.confirm-delete-path = path;
+                        root.confirm-delete-open = true;
+                    }
                     sftp-view(path) => { root.sftp-view(term.id, path); }
                     sftp-edit(path) => { root.sftp-edit(term.id, path); }
                     paste-from-clipboard() => { root.paste-from-clipboard(term.id); }
@@ -742,8 +761,31 @@ export component AppWindow inherits Window {
         draft-password <=> root.dialog-password;
         draft-key-path <=> root.dialog-key-path;
         draft-proxy <=> root.dialog-proxy;
+        draft-kind <=> root.dialog-kind;
+        draft-serial-port <=> root.dialog-serial-port;
+        draft-baud <=> root.dialog-baud;
+        draft-data-bits <=> root.dialog-data-bits;
+        draft-stop-bits <=> root.dialog-stop-bits;
+        draft-parity <=> root.dialog-parity;
+        draft-flow <=> root.dialog-flow;
         submit(draft) => { root.session-dialog-submit(draft); }
         cancel => { root.session-dialog-cancel(); }
         pick-key-file => { root.session-dialog-pick-key(); }
+    }
+
+    // --- Delete confirmation (#28) ----------------------------------------
+    ConfirmDialog {
+        width: parent.width;
+        height: parent.height;
+        is-open <=> root.confirm-delete-open;
+        title: @tr("Confirm delete");
+        message: @tr("Delete this item? This cannot be undone.");
+        detail: root.confirm-delete-path;
+        confirm-label: @tr("Delete");
+        confirm => {
+            root.sftp-delete(root.confirm-delete-tab, root.confirm-delete-path);
+            root.confirm-delete-open = false;
+        }
+        cancel => { root.confirm-delete-open = false; }
     }
 }

@@ -191,3 +191,42 @@ msgstr "Proxy (optional)"
 
 msgid "Leave blank to use $ALL_PROXY or connect directly"
 msgstr "Leave blank to use $ALL_PROXY or connect directly"
+
+msgid "Connection type"
+msgstr "Connection type"
+
+msgid "Serial"
+msgstr "Serial"
+
+msgid "Serial port"
+msgstr "Serial port"
+
+msgid "Baud rate"
+msgstr "Baud rate"
+
+msgid "Data bits / Stop bits / Parity"
+msgstr "Data bits / Stop bits / Parity"
+
+msgid "Flow control"
+msgstr "Flow control"
+
+msgid "None"
+msgstr "None"
+
+msgid "Hardware"
+msgstr "Hardware"
+
+msgid "Software"
+msgstr "Software"
+
+msgid "Confirm delete"
+msgstr "Confirm delete"
+
+msgid "Delete this item? This cannot be undone."
+msgstr "Delete this item? This cannot be undone."
+
+msgid "Please confirm"
+msgstr "Please confirm"
+
+msgid "Confirm"
+msgstr "Confirm"

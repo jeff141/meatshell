@@ -22,8 +22,15 @@ struct TermBuffer {
     parser: vt100::Parser,
     /// Active find query for this tab ("" = no search).
     find_query: String,
-    /// Drag selection (start_row, start_col, end_row, end_col) in grid cells.
-    sel: Option<(u16, u16, u16, u16)>,
+    /// Drag selection in ABSOLUTE scrollback coordinates: each endpoint is a
+    /// `(combined_row, col)` where `combined_row` indexes the virtual buffer of
+    /// `history` lines followed by the live screen rows.  Absolute (rather than
+    /// visible-window) coordinates keep the selection pinned to its content
+    /// while the view auto-scrolls during a drag, so a top-to-bottom selection
+    /// across more than one screen of scrollback copies every line (#18).
+    /// `anchor` = where the drag began, `focus` = the moving end.
+    sel_anchor: Option<(usize, u16)>,
+    sel_focus: Option<(usize, u16)>,
     /// Session scrollback: lines that have scrolled off the top (oldest first).
     history: Vec<Line>,
     /// Previous frame's grid lines, for scroll-off detection.
@@ -58,7 +65,7 @@ use i_slint_backend_winit::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::runtime::Runtime;
 
-use crate::config::{AuthMethod, ConfigStore, Secret, Session};
+use crate::config::{AuthMethod, ConfigStore, Secret, Session, SessionKind};
 use crate::i18n::t;
 use crate::sftp::{spawn_sftp, SftpHandle};
 use crate::ssh::{
@@ -330,7 +337,7 @@ fn linux_clipboard_write(text: &str) -> Result<()> {
 fn linux_clipboard_read() -> Result<String> {
     use std::process::{Command, Stdio};
     let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
-        ("pbread", &[])
+        ("pbpaste", &[])
     } else if std::env::var("WAYLAND_DISPLAY").is_ok() {
         ("wl-paste", &[])
     } else {
@@ -348,6 +355,31 @@ fn linux_clipboard_read() -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
+/// Embed the app icon PNG into the binary and hand it to the Slint window.
+///
+/// On Linux the dock/taskbar icon comes from the XDG icon theme, which only
+/// works when a `.desktop` file + icon are installed system-wide.  When the
+/// app runs as a bare AppImage (or from a plain directory without running
+/// install-linux.sh) there is no installed icon, so the dock falls back to
+/// a generic gear.  Setting the icon programmatically here covers that case
+/// for both X11 and Wayland without any external installation step.
+///
+/// Windows gets its icon from the `.ico` embedded by winresource at link
+/// time; macOS from the app bundle — neither path needs runtime decoding.
+#[cfg(target_os = "linux")]
+fn set_window_icon(window: &AppWindow) {
+    use i_slint_backend_winit::winit;
+    const ICON_PNG: &[u8] = include_bytes!("../assets/icon@512.png");
+    if let Ok(img) = image::load_from_memory(ICON_PNG) {
+        let rgba = img.into_rgba8();
+        let (w, h) = rgba.dimensions();
+        if let Ok(icon) = winit::window::Icon::from_rgba(rgba.to_vec(), w, h) {
+            window.window().with_winit_window(|ww| {
+                ww.set_window_icon(Some(icon.clone()));
+            });
+        }
+    }
+}
 pub fn run() -> Result<()> {
     // --- Runtime + store -------------------------------------------------
     let runtime = Arc::new(
@@ -384,6 +416,12 @@ pub fn run() -> Result<()> {
     // Windows the icon comes from the embedded .ico, so this is a no-op there.)
     let _ = slint::set_xdg_app_id("meatshell");
     let window = AppWindow::new().context("failed to build Slint window")?;
+
+    // Set the window icon from the PNG embedded in the binary so the dock
+    // shows the correct icon even without a system-installed .desktop entry
+    // (e.g. AppImage without AppImageLauncher, or plain binary in ~/bin).
+    #[cfg(target_os = "linux")]
+    set_window_icon(&window);
 
     // Apply the saved UI language.  The Rust-side flag drives `i18n::t(...)`;
     // `apply_to_slint` selects the bundled `.po` for the static `@tr(...)` text
@@ -549,10 +587,7 @@ pub fn run() -> Result<()> {
                     let matches = compute_find_matches(
                         &buf.displayed_text, &buf.find_query,
                     );
-                    let sel = match buf.sel {
-                        Some((sr, sc, er, ec)) => selection_rects(sr, sc, er, ec, cols),
-                        None => Vec::new(),
-                    };
+                    let sel = buf.selection_rects_visible(cols);
                     let spans = ModelRc::from(Rc::new(VecModel::from(b.spans)));
                     let fm = ModelRc::from(Rc::new(VecModel::from(matches)));
                     let sm = ModelRc::from(Rc::new(VecModel::from(sel)));
@@ -952,6 +987,13 @@ fn wire_session_callbacks(
             w.set_dialog_password("".into());
             w.set_dialog_key_path("".into());
             w.set_dialog_proxy("".into());
+            w.set_dialog_kind("ssh".into());
+            w.set_dialog_serial_port("".into());
+            w.set_dialog_baud("115200".into());
+            w.set_dialog_data_bits("8".into());
+            w.set_dialog_stop_bits("1".into());
+            w.set_dialog_parity("none".into());
+            w.set_dialog_flow("none".into());
             w.set_dialog_editing(false);
             w.set_dialog_open(true);
         }
@@ -988,16 +1030,13 @@ fn wire_session_callbacks(
                         AuthMethod::Key
                     };
                     s.upsert(Session {
-                        id: uuid::Uuid::new_v4().to_string(),
                         name: h.alias,
                         host: h.hostname,
                         port: h.port,
                         user: if h.user.is_empty() { "root".into() } else { h.user },
                         auth,
-                        password: Secret::default(),
                         private_key_path: h.identity_file,
-                        proxy: String::new(),
-                        last_used: None,
+                        ..Session::new_empty()
                     });
                     added += 1;
                 }
@@ -1037,6 +1076,13 @@ fn wire_session_callbacks(
                 w.set_dialog_password("".into());
                 w.set_dialog_key_path(session.private_key_path.clone().into());
                 w.set_dialog_proxy(session.proxy.clone().into());
+                w.set_dialog_kind(session.kind.as_str().into());
+                w.set_dialog_serial_port(session.serial_port.clone().into());
+                w.set_dialog_baud(session.baud_rate.to_string().into());
+                w.set_dialog_data_bits(session.data_bits.to_string().into());
+                w.set_dialog_stop_bits(session.stop_bits.to_string().into());
+                w.set_dialog_parity(session.parity.clone().into());
+                w.set_dialog_flow(session.flow_control.clone().into());
                 w.set_dialog_editing(true);
                 w.set_dialog_open(true);
             }
@@ -1083,15 +1129,33 @@ fn wire_session_callbacks(
             } else {
                 Secret::new(draft.password.to_string())
             };
+            let kind = crate::config::SessionKind::from_str(&draft.kind.to_string());
+            // Auto-name: serial → port label, otherwise user@host.
+            let auto_name = match kind {
+                crate::config::SessionKind::Serial => {
+                    format!("{} @{}", draft.serial_port, draft.baud_rate)
+                }
+                _ => format!("{}@{}", draft.user, draft.host),
+            };
+            // Telnet defaults to port 23, SSH to 22; serial ignores port.
+            let default_port = if kind == crate::config::SessionKind::Telnet {
+                23
+            } else {
+                22
+            };
             let new_session = Session {
                 id,
                 name: if draft.name.is_empty() {
-                    format!("{}@{}", draft.user, draft.host)
+                    auto_name
                 } else {
                     draft.name.to_string()
                 },
                 host: draft.host.to_string(),
-                port: if draft.port <= 0 { 22 } else { draft.port as u16 },
+                port: if draft.port <= 0 {
+                    default_port
+                } else {
+                    draft.port as u16
+                },
                 user: draft.user.to_string(),
                 auth: AuthMethod::from_str(&draft.auth.to_string()),
                 password,
@@ -1099,6 +1163,17 @@ fn wire_session_callbacks(
                 private_key_path: draft.private_key_path.to_string().replace('\\', "/"),
                 proxy: draft.proxy.to_string(),
                 last_used: None,
+                kind,
+                serial_port: draft.serial_port.to_string(),
+                baud_rate: if draft.baud_rate <= 0 {
+                    115_200
+                } else {
+                    draft.baud_rate as u32
+                },
+                data_bits: draft.data_bits as u8,
+                stop_bits: draft.stop_bits as u8,
+                parity: draft.parity.to_string(),
+                flow_control: draft.flow_control.to_string(),
             };
             {
                 let mut s = store.borrow_mut();
@@ -1169,13 +1244,24 @@ fn wire_session_callbacks(
             let tab_id = format!("term-{}", uuid::Uuid::new_v4());
             let tab_title = session.name.clone();
 
+            // Connection label shown in the sidebar / status line, per transport.
+            let conn_label = match session.kind {
+                SessionKind::Ssh => format!("{}@{}", session.user, session.host),
+                SessionKind::Serial => {
+                    format!("{} @{}", session.serial_port, session.baud_rate)
+                }
+                SessionKind::Telnet => format!("telnet {}:{}", session.host, session.port),
+            };
+            // Serial / Telnet have no SFTP side-channel.
+            let has_sftp = session.kind == SessionKind::Ssh;
+
             // Seed the per-tab status so the sidebar shows "连接中 host" the
             // moment this tab becomes active (the `changed active-tab-id`
             // handler fires refresh-sidebar right after set_active_tab_id below).
             tab_statuses.lock().unwrap().insert(
                 tab_id.clone(),
                 TabStatus {
-                    host: format!("{}@{}", session.user, session.host),
+                    host: conn_label.clone(),
                     state: 0,
                     ..Default::default()
                 },
@@ -1202,8 +1288,12 @@ fn wire_session_callbacks(
                 sftp_entries: ModelRc::from(
                     std::rc::Rc::new(VecModel::<SftpEntry>::default()),
                 ),
-                sftp_status: t("SFTP 连接中...", "SFTP connecting...").into(),
-                sftp_loading: true,
+                sftp_status: if has_sftp {
+                    t("SFTP 连接中...", "SFTP connecting...").into()
+                } else {
+                    t("此会话类型不支持 SFTP", "SFTP not available for this session").into()
+                },
+                sftp_loading: has_sftp,
                 sftp_tree_nodes: ModelRc::from(
                     std::rc::Rc::new(VecModel::<SftpTreeNode>::default()),
                 ),
@@ -1216,7 +1306,8 @@ fn wire_session_callbacks(
                 TermBuffer {
                     parser: vt100::Parser::new(24, 80, 5000),
                     find_query: String::new(),
-                    sel: None,
+                    sel_anchor: None,
+                    sel_focus: None,
                     history: Vec::new(),
                     prev: Vec::new(),
                     view_offset: 0,
@@ -1237,33 +1328,43 @@ fn wire_session_callbacks(
             // will fire again shortly and send an accurate window_change if
             // needed.
             let (initial_cols, initial_rows) = *last_term_size.lock().unwrap();
-            let (handle, rx) = spawn_session(
-                runtime.handle(),
-                tab_id.clone(),
-                session.clone(),
-                initial_cols,
-                initial_rows,
-            );
+            let (handle, rx) = match session.kind {
+                SessionKind::Ssh => spawn_session(
+                    runtime.handle(),
+                    tab_id.clone(),
+                    session.clone(),
+                    initial_cols,
+                    initial_rows,
+                ),
+                SessionKind::Serial => crate::serial::spawn_serial_session(
+                    runtime.handle(),
+                    tab_id.clone(),
+                    session.clone(),
+                ),
+                SessionKind::Telnet => crate::telnet::spawn_telnet_session(
+                    runtime.handle(),
+                    tab_id.clone(),
+                    session.clone(),
+                    initial_cols,
+                    initial_rows,
+                ),
+            };
             handles.borrow_mut().insert(tab_id.clone(), handle);
 
             // Spawn separate SFTP connection for the same session.
             // The SFTP worker pushes SessionEvent::SftpEntries / SftpStatus
             // back via the same receiver channel (rx) — no second receiver
             // needed because spawn_sftp accepts an UnboundedSender clone.
-            let sftp_evt_tx = {
-                // We need the sender half of the channel that rx drains from.
-                // spawn_session doesn't expose it, so we rebuild: spawn_sftp
-                // gets its own sender that injects events into the same stream
-                // by accepting a clone of the existing UnboundedSender.
-                // Actually we pass a *new* sender that was set up alongside rx.
-                // Re-examine: spawn_session returns (handle, rx) where rx came
-                // from mpsc::unbounded_channel inside spawn_session; we have no
-                // access to tx.  So create a second channel just for SFTP events
-                // and merge them in the pump thread below.
+            // Only SSH sessions get an SFTP side-channel; Serial / Telnet skip it.
+            let sftp_evt_tx = if has_sftp {
+                // spawn_session doesn't expose its event sender, so SFTP gets its
+                // own channel; the dedicated pump below merges its events in.
                 let (sftp_tx, sftp_rx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
                 let sftp_handle = spawn_sftp(runtime.handle(), session, sftp_tx);
                 sftp_handles.lock().unwrap().insert(tab_id.clone(), sftp_handle);
-                sftp_rx
+                Some(sftp_rx)
+            } else {
+                None
             };
 
             // --- Shell event pump (dedicated thread) ----------------------
@@ -1334,8 +1435,8 @@ fn wire_session_callbacks(
             // --- SFTP event pump (separate thread) -------------------------
             // Never blocks on shell; dispatches SFTP events the moment they
             // arrive so tree/file-list updates are immediate even when the
-            // terminal is idle.
-            {
+            // terminal is idle.  Only present for SSH sessions.
+            if let Some(sftp_evt_tx) = sftp_evt_tx {
                 let weak_sftp = weak.clone();
                 let bufs_sftp = bufs.clone();
                 let tab_id_sftp = tab_id.clone();
@@ -1441,66 +1542,6 @@ fn compute_find_matches(rows: &[String], query: &str) -> Vec<TermMatch> {
     out
 }
 
-/// Order a selection so start ≤ end (by row, then column).
-fn norm_sel(sr: u16, sc: u16, er: u16, ec: u16) -> (u16, u16, u16, u16) {
-    if (sr, sc) <= (er, ec) {
-        (sr, sc, er, ec)
-    } else {
-        (er, ec, sr, sc)
-    }
-}
-
-/// Highlight rectangles for a linear (line-wrapping) selection.
-fn selection_rects(sr: u16, sc: u16, er: u16, ec: u16, cols: u16) -> Vec<TermMatch> {
-    let (sr, sc, er, ec) = norm_sel(sr, sc, er, ec);
-    let mut out = Vec::new();
-    if sr == er {
-        let lo = sc.min(ec);
-        let hi = sc.max(ec);
-        out.push(TermMatch { row: sr as i32, col: lo as i32, len: (hi - lo + 1) as i32 });
-    } else {
-        out.push(TermMatch { row: sr as i32, col: sc as i32, len: (cols - sc) as i32 });
-        for r in (sr + 1)..er {
-            out.push(TermMatch { row: r as i32, col: 0, len: cols as i32 });
-        }
-        out.push(TermMatch { row: er as i32, col: 0, len: (ec + 1) as i32 });
-    }
-    out
-}
-
-/// Extract the selected text from the displayed rows (trailing spaces trimmed).
-fn extract_selection(rows: &[String], sr: u16, sc: u16, er: u16, ec: u16) -> String {
-    let (sr, sc, er, ec) = norm_sel(sr, sc, er, ec);
-    let mut out = String::new();
-    for r in sr..=er {
-        let chars: Vec<char> = rows
-            .get(r as usize)
-            .map(|l| l.chars().collect())
-            .unwrap_or_default();
-        let (lo, hi) = if sr == er {
-            (sc.min(ec), sc.max(ec))
-        } else if r == sr {
-            (sc, u16::MAX)
-        } else if r == er {
-            (0, ec)
-        } else {
-            (0, u16::MAX)
-        };
-        let lo = (lo as usize).min(chars.len());
-        let hi = ((hi as usize).saturating_add(1)).min(chars.len()); // exclusive
-        let seg: String = if lo < hi {
-            chars[lo..hi].iter().collect()
-        } else {
-            String::new()
-        };
-        out.push_str(seg.trim_end());
-        if r != er {
-            out.push('\n');
-        }
-    }
-    out
-}
-
 /// Recompute spans + cursor + find/selection highlights for one tab from its
 /// current vt100 screen (respecting scrollback) and push them to the model.
 /// Used by scroll + selection callbacks (Output has its own equivalent inline).
@@ -1511,10 +1552,7 @@ fn rebuild_tab_display(win: &AppWindow, bufs: &TermBuffers, tab_id: &str) {
         let cols = buf.parser.screen().size().1;
         let b = buf.render(); // also refreshes buf.displayed_text
         let matches = compute_find_matches(&buf.displayed_text, &buf.find_query);
-        let sel = match buf.sel {
-            Some((sr, sc, er, ec)) => selection_rects(sr, sc, er, ec, cols),
-            None => Vec::new(),
-        };
+        let sel = buf.selection_rects_visible(cols);
         (b, matches, sel)
     };
     let (b, matches, sel) = data;
@@ -1719,10 +1757,7 @@ fn apply_session_event_to_window(
                     let cols = buf.parser.screen().size().1;
                     let b = buf.render(); // refreshes buf.displayed_text
                     let matches = compute_find_matches(&buf.displayed_text, &buf.find_query);
-                    let sel = match buf.sel {
-                        Some((sr, sc, er, ec)) => selection_rects(sr, sc, er, ec, cols),
-                        None => Vec::new(),
-                    };
+                    let sel = buf.selection_rects_visible(cols);
                     Some((b, matches, sel))
                 } else {
                     None
@@ -2130,7 +2165,9 @@ fn wire_sftp_callbacks(
         });
     }
 
-    // Context menu → 删除 a remote file.
+    // Context menu → 删除 a remote file. The irreversible-delete confirmation
+    // (#28) is handled by the in-app ConfirmDialog in the UI layer, so by the
+    // time this fires the user has already confirmed.
     {
         let sftp_handles = sftp_handles.clone();
         window.on_sftp_delete(move |tab_id: SharedString, path: SharedString| {
@@ -2200,20 +2237,22 @@ fn wire_key_input(
                     None => false,
                 }
             };
+            // Never log the raw key string — it can be a password character
+            // (#15). redact_key keeps control codes but masks printable text.
             tracing::debug!(
-                "send_key tab={} key={:?} ctrl={} alt={} shift={} app_cursor={}",
-                tab_id, key.as_str(), ctrl, alt, shift, app_cursor
+                "send_key tab={} key={} ctrl={} alt={} shift={} app_cursor={}",
+                tab_id, redact_key(key.as_str()), ctrl, alt, shift, app_cursor
             );
 
             // ── Shift / Backspace 诊断日志 (info 级, 无需 RUST_LOG=debug) ─────
             // 每个 Shift 相关事件都打印 key 的 Unicode 码位，方便对比
             // 左Shift / 右Shift 是否产生不同的 key 字符串。
             if shift || key.as_str() == "\u{0008}" {
-                let codepoints: Vec<String> = if key.as_str().is_empty() {
-                    vec!["(empty)".to_string()]
-                } else {
-                    key.as_str().chars().map(|c| format!("U+{:04X}", c as u32)).collect()
-                };
+                // INFO level (no RUST_LOG needed) — must not leak the key text.
+                // redact_key reveals only control code points (the IME markers
+                // this diagnostic cares about), masking any printable char that
+                // could be part of a Shift-typed password symbol (#15).
+                let codepoints = redact_key(key.as_str());
                 let elapsed_ms = last_shift_time
                     .lock()
                     .unwrap()
@@ -2221,7 +2260,7 @@ fn wire_key_input(
                     .unwrap_or_else(|| "never".to_string());
                 tracing::info!(
                     "[KEY_DIAG] key={} shift={} ctrl={} alt={} | last_shift={}",
-                    codepoints.join(","), shift, ctrl, alt, elapsed_ms
+                    codepoints, shift, ctrl, alt, elapsed_ms
                 );
             }
 
@@ -2430,25 +2469,34 @@ fn wire_key_input(
                 let new_rows = rows as u16;
                 // Shrinking the grid (e.g. dragging the SFTP panel up) makes
                 // vt100's set_size truncate rows from the BOTTOM — silently
-                // dropping the most recent output + prompt (#18).  Before
-                // shrinking, save the top rows that should scroll off into our
-                // scrollback, then scroll the screen up so vt100 keeps the
-                // BOTTOM rows visible (correct terminal semantics).  Skipped on
-                // the alternate screen (vim/btop own their full-screen buffer).
+                // dropping the most recent output + prompt (#18).  To keep the
+                // bottom (recent) rows we scroll the screen up first, but only
+                // by as much as is needed to keep the CURSOR on-screen: the rows
+                // *below* the cursor are unused blank space and can be truncated
+                // for free.  Scrolling by the full delta instead would push real
+                // content off the top into scrollback whenever the screen wasn't
+                // full — e.g. a fresh shell with a few prompt lines — leaving a
+                // blank grid with the cursor stranded at the top, and rapid
+                // up/down dragging would repeat that until the prompt was gone.
+                // Skipped on the alternate screen (vim/btop own their buffer).
                 if new_rows < old_rows && !buf.parser.screen().alternate_screen() {
-                    let delta = old_rows - new_rows;
-                    let saved: Vec<Line> = {
-                        let s = buf.parser.screen();
-                        (0..delta).map(|r| build_row(s, r, old_cols)).collect()
-                    };
-                    for line in saved {
-                        buf.history.push(line);
+                    let (cursor_row, _) = buf.parser.screen().cursor_position();
+                    // Rows that must scroll off the top to keep the cursor in view.
+                    let scroll = (cursor_row + 1).saturating_sub(new_rows);
+                    if scroll > 0 {
+                        let saved: Vec<Line> = {
+                            let s = buf.parser.screen();
+                            (0..scroll).map(|r| build_row(s, r, old_cols)).collect()
+                        };
+                        for line in saved {
+                            buf.history.push(line);
+                        }
+                        if buf.history.len() > MAX_HISTORY {
+                            let drop = buf.history.len() - MAX_HISTORY;
+                            buf.history.drain(0..drop);
+                        }
+                        buf.parser.process(format!("\x1b[{scroll}S").as_bytes());
                     }
-                    if buf.history.len() > MAX_HISTORY {
-                        let drop = buf.history.len() - MAX_HISTORY;
-                        buf.history.drain(0..drop);
-                    }
-                    buf.parser.process(format!("\x1b[{delta}S").as_bytes());
                 }
                 buf.parser.set_size(new_rows, cols as u16);
                 // The pre/post-resize screens differ in size+content; drop the
@@ -2469,11 +2517,11 @@ fn wire_key_input(
                     Some(buf) => {
                         // Copy the drag-selection when there is one, else the
                         // whole displayed screen.
-                        match buf.sel {
-                            Some((sr, sc, er, ec)) if (sr, sc) != (er, ec) => {
-                                extract_selection(&buf.displayed_text, sr, sc, er, ec)
-                            }
-                            _ => buf.displayed_text.join("\n"),
+                        let sel = buf.extract_selection_text();
+                        if sel.is_empty() {
+                            buf.displayed_text.join("\n")
+                        } else {
+                            sel
                         }
                     }
                     None => String::new(),
@@ -2548,7 +2596,8 @@ fn wire_key_input(
                 buf.history = Vec::new(); // recycle the session scrollback
                 buf.prev = Vec::new();
                 buf.view_offset = 0;
-                buf.sel = None;
+                buf.sel_anchor = None;
+                buf.sel_focus = None;
                 buf.displayed_text = Vec::new();
             }
             if let Some(win) = weak.upgrade() {
@@ -2628,7 +2677,10 @@ fn wire_key_input(
                 let (rows, cols) = buf.parser.screen().size();
                 let r = row.clamp(0, rows.saturating_sub(1) as i32) as u16;
                 let c = col.clamp(0, cols.saturating_sub(1) as i32) as u16;
-                buf.sel = Some((r, c, r, c));
+                // Anchor + focus in absolute scrollback coordinates.
+                let abs = buf.vis_to_abs(r);
+                buf.sel_anchor = Some((abs, c));
+                buf.sel_focus = Some((abs, c));
             }
             if let Some(win) = weak.upgrade() {
                 rebuild_tab_display(&win, &bufs_sel, &tid);
@@ -2646,8 +2698,9 @@ fn wire_key_input(
                 let (rows, cols) = buf.parser.screen().size();
                 let r = row.clamp(0, rows.saturating_sub(1) as i32) as u16;
                 let c = col.clamp(0, cols.saturating_sub(1) as i32) as u16;
-                if let Some((sr, sc, _, _)) = buf.sel {
-                    buf.sel = Some((sr, sc, r, c));
+                if buf.sel_anchor.is_some() {
+                    let abs = buf.vis_to_abs(r);
+                    buf.sel_focus = Some((abs, c));
                 }
             }
             if let Some(win) = weak.upgrade() {
@@ -2665,14 +2718,14 @@ fn wire_key_input(
             let text = {
                 let mut map = bufs_sel.lock().unwrap();
                 let Some(buf) = map.get_mut(&tid) else { return };
-                match buf.sel {
-                    Some((sr, sc, er, ec)) if (sr, sc) != (er, ec) => {
-                        Some(extract_selection(&buf.displayed_text, sr, sc, er, ec))
-                    }
-                    _ => {
-                        buf.sel = None; // treat as click → clear selection
-                        None
-                    }
+                let extracted = buf.extract_selection_text();
+                if extracted.is_empty() {
+                    // Zero-area selection (a plain click) → clear it.
+                    buf.sel_anchor = None;
+                    buf.sel_focus = None;
+                    None
+                } else {
+                    Some(extracted)
                 }
             };
             match text {
@@ -2690,10 +2743,10 @@ fn wire_key_input(
             }
         });
     }
-    // Auto-scroll while drag-selecting past the visible top/bottom edge.  We
-    // move the scrollback view by a couple of lines per tick and shift the
-    // selection anchor by the same amount so it stays pinned to its content
-    // while the end is parked at the edge row.
+    // Auto-scroll while drag-selecting past the visible top/bottom edge.  The
+    // anchor is in absolute coordinates so it stays pinned no matter how far the
+    // view moves; we only advance the scrollback view and re-point the focus at
+    // the absolute row now sitting on the edge the mouse is parked against.
     {
         let bufs_sel = bufs.clone();
         let weak = window.as_weak();
@@ -2706,32 +2759,36 @@ fn wire_key_input(
                 if buf.parser.screen().alternate_screen() {
                     return;
                 }
+                if buf.sel_anchor.is_none() {
+                    return;
+                }
                 let rows = buf.parser.screen().size().0;
                 let last = rows.saturating_sub(1);
                 let max_off = buf.history.len();
                 let step = 2usize;
-                let Some((sr, sc, _er, ec)) = buf.sel else { return };
-                if dir < 0 {
+                // Keep the focus column the user last dragged to.
+                let focus_col = buf.sel_focus.map(|f| f.1).unwrap_or(0);
+                let edge_vis = if dir < 0 {
                     // Mouse above the top → reveal older lines.
                     let new_off = (buf.view_offset + step).min(max_off);
-                    let delta = new_off - buf.view_offset;
-                    if delta == 0 {
+                    if new_off == buf.view_offset {
                         return; // already at the oldest line
                     }
                     buf.view_offset = new_off;
-                    let nsr = ((sr as usize) + delta).min(last as usize) as u16;
-                    buf.sel = Some((nsr, sc, 0, ec));
+                    0u16
                 } else if dir > 0 {
                     // Mouse below the bottom → move toward the live tail.
                     let new_off = buf.view_offset.saturating_sub(step);
-                    let delta = buf.view_offset - new_off;
-                    if delta == 0 {
+                    if new_off == buf.view_offset {
                         return; // already at the live bottom
                     }
                     buf.view_offset = new_off;
-                    let nsr = (sr as i32 - delta as i32).max(0) as u16;
-                    buf.sel = Some((nsr, sc, last, ec));
-                }
+                    last
+                } else {
+                    return;
+                };
+                let abs = buf.vis_to_abs(edge_vis);
+                buf.sel_focus = Some((abs, focus_col));
             }
             if let Some(win) = weak.upgrade() {
                 rebuild_tab_display(&win, &bufs_sel, &tid);
@@ -2764,6 +2821,33 @@ fn set_terminal_row(win: &AppWindow, tab_id: &str, mutator: impl Fn(&mut Termina
 /// Slint uses Unicode Private Use Area (`\u{F700}`…) for special keys.
 /// Regular printable characters and C0 control characters are passed as-is.
 ///
+/// Render a key string for diagnostic logs WITHOUT leaking its content (#15).
+///
+/// Any printable character could be a password character, so we never emit it.
+/// Only C0/C1 control code points (Backspace, Esc, the IME-injected 0x10/0x15
+/// markers, …) are revealed — those are exactly what the Shift/Backspace IME
+/// diagnostics need and are never password material. Printable characters are
+/// collapsed to a count, so the logs stay useful without exposing keystrokes.
+fn redact_key(key: &str) -> String {
+    if key.is_empty() {
+        return "(empty)".to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut printable = 0usize;
+    for c in key.chars() {
+        let cp = c as u32;
+        if cp < 0x20 || (0x7f..=0x9f).contains(&cp) {
+            parts.push(format!("U+{cp:04X}"));
+        } else {
+            printable += 1;
+        }
+    }
+    if printable > 0 {
+        parts.push(format!("<{printable} printable redacted>"));
+    }
+    parts.join(",")
+}
+
 /// `app_cursor` mirrors the remote terminal's DECCKM mode (`\x1b[?1h/l`):
 /// when true the four arrow keys must use SS3 sequences (`\x1bOA`…) instead
 /// of the default CSI sequences (`\x1b[A`…).  Full-screen apps like nano and
@@ -3034,6 +3118,136 @@ fn detect_scroll(prev: &[Line], curr: &[Line]) -> usize {
 }
 
 impl TermBuffer {
+    // ---- Absolute-coordinate selection helpers (#18 follow-up) -------------
+    //
+    // The "combined" buffer is `history` (oldest first) followed by the live
+    // screen rows.  A visible window of `rows` rows looks at a slice of it whose
+    // top index depends on whether we're at the live bottom or scrolled up.
+
+    /// Live screen rows plus the count of non-blank ones at the top.
+    fn live_rows(&self) -> (Vec<Line>, usize) {
+        let s = self.parser.screen();
+        let (rows, cols) = s.size();
+        let live: Vec<Line> = (0..rows).map(|r| build_row(s, r, cols)).collect();
+        let used = live
+            .iter()
+            .rposition(|(_, runs)| !runs.is_empty())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        (live, used)
+    }
+
+    /// Absolute combined-row index of the top visible row for the current view.
+    fn view_top_abs(&self, live_used: usize) -> usize {
+        let rows = self.parser.screen().size().0 as usize;
+        let hist_len = self.history.len();
+        if self.view_offset == 0 {
+            // Live view: visible row 0 is live screen row 0 = combined[hist_len].
+            hist_len
+        } else {
+            let combined_len = hist_len + live_used;
+            combined_len.saturating_sub(rows + self.view_offset)
+        }
+    }
+
+    /// Map a visible row (0..rows) to its absolute combined-row index.
+    fn vis_to_abs(&self, vis_row: u16) -> usize {
+        let (_, live_used) = self.live_rows();
+        self.view_top_abs(live_used) + vis_row as usize
+    }
+
+    /// Highlight rectangles for the current selection, clipped to the visible
+    /// window of the current view.
+    fn selection_rects_visible(&self, cols: u16) -> Vec<TermMatch> {
+        let (Some((ar, ac)), Some((fr, fc))) = (self.sel_anchor, self.sel_focus) else {
+            return Vec::new();
+        };
+        let (lo_r, lo_c, hi_r, hi_c) = if (ar, ac) <= (fr, fc) {
+            (ar, ac, fr, fc)
+        } else {
+            (fr, fc, ar, ac)
+        };
+        if (lo_r, lo_c) == (hi_r, hi_c) {
+            return Vec::new();
+        }
+        let (_, live_used) = self.live_rows();
+        let top = self.view_top_abs(live_used);
+        let rows = self.parser.screen().size().0;
+        let mut out = Vec::new();
+        for vis in 0..rows {
+            let abs = top + vis as usize;
+            if abs < lo_r || abs > hi_r {
+                continue;
+            }
+            let (c0, c1) = if abs == lo_r && abs == hi_r {
+                (lo_c.min(hi_c), lo_c.max(hi_c))
+            } else if abs == lo_r {
+                (lo_c, cols.saturating_sub(1))
+            } else if abs == hi_r {
+                (0, hi_c)
+            } else {
+                (0, cols.saturating_sub(1))
+            };
+            out.push(TermMatch {
+                row: vis as i32,
+                col: c0 as i32,
+                len: (c1.saturating_sub(c0) + 1) as i32,
+            });
+        }
+        out
+    }
+
+    /// Extract the selected text from the combined buffer (whole selection,
+    /// even the parts currently scrolled out of view).
+    fn extract_selection_text(&self) -> String {
+        let (Some((ar, ac)), Some((fr, fc))) = (self.sel_anchor, self.sel_focus) else {
+            return String::new();
+        };
+        let (lo_r, lo_c, hi_r, hi_c) = if (ar, ac) <= (fr, fc) {
+            (ar, ac, fr, fc)
+        } else {
+            (fr, fc, ar, ac)
+        };
+        let (live, live_used) = self.live_rows();
+        let hist_len = self.history.len();
+        let combined_len = hist_len + live_used;
+        // Clamp into real content so a focus parked on a blank row below the
+        // prompt doesn't emit trailing empty lines.
+        let hi_r = hi_r.min(combined_len.saturating_sub(1));
+        let mut out = String::new();
+        for r in lo_r..=hi_r {
+            let line: &str = if r < hist_len {
+                &self.history[r].0
+            } else if r - hist_len < live.len() {
+                &live[r - hist_len].0
+            } else {
+                ""
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let (c0, c1) = if r == lo_r && r == hi_r {
+                (lo_c.min(hi_c), lo_c.max(hi_c))
+            } else if r == lo_r {
+                (lo_c, u16::MAX)
+            } else if r == hi_r {
+                (0, hi_c)
+            } else {
+                (0, u16::MAX)
+            };
+            let c0 = (c0 as usize).min(chars.len());
+            let c1 = ((c1 as usize).saturating_add(1)).min(chars.len());
+            let seg: String = if c0 < c1 {
+                chars[c0..c1].iter().collect()
+            } else {
+                String::new()
+            };
+            out.push_str(seg.trim_end());
+            if r != hi_r {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// Feed bytes to vt100 and capture scrolled-off lines into history.
     ///
     /// We detect scroll by diffing the screen before/after a `process`, which
@@ -3335,5 +3549,96 @@ fn parent_path(path: &str) -> String {
         Some(0) => "/".to_string(),
         Some(i) => trimmed[..i].to_string(),
         None => "/".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn hist_line(s: &str) -> Line {
+        (s.to_string(), Vec::new())
+    }
+
+    /// A TermBuffer whose live screen (rows×cols) shows `live_lines`, with the
+    /// given `history` above it, viewed at `view_offset` (0 = live bottom).
+    fn make_buf(
+        rows: u16,
+        cols: u16,
+        history: &[&str],
+        live_lines: &[&str],
+        view_offset: usize,
+    ) -> TermBuffer {
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(live_lines.join("\r\n").as_bytes());
+        TermBuffer {
+            parser,
+            find_query: String::new(),
+            sel_anchor: None,
+            sel_focus: None,
+            history: history.iter().map(|s| hist_line(s)).collect(),
+            prev: Vec::new(),
+            view_offset,
+            displayed_text: Vec::new(),
+            csi_state: CsiState::Normal,
+        }
+    }
+
+    #[test]
+    fn vis_to_abs_maps_live_and_scrolled_consistently() {
+        // history H0..H2 (3 lines), live LIVE0/LIVE1 → combined len 5.
+        let live = make_buf(5, 20, &["H0", "H1", "H2"], &["LIVE0", "LIVE1"], 0);
+        assert_eq!(live.vis_to_abs(0), 3, "live row 0 is first live line");
+        assert_eq!(live.vis_to_abs(1), 4);
+
+        // Scrolled to the very top (offset = history len).
+        let top = make_buf(5, 20, &["H0", "H1", "H2"], &["LIVE0", "LIVE1"], 3);
+        assert_eq!(top.vis_to_abs(0), 0, "top row 0 is oldest history line");
+        assert_eq!(top.vis_to_abs(2), 2);
+        assert_eq!(top.vis_to_abs(3), 3, "row 3 crosses into live content");
+    }
+
+    #[test]
+    fn extract_spans_history_and_live() {
+        let mut buf = make_buf(5, 20, &["HIST0", "HIST1", "HIST2"], &["LIVE0", "LIVE1"], 3);
+        buf.sel_anchor = Some((0, 0)); // top of history
+        buf.sel_focus = Some((4, 19)); // end of last live line
+        assert_eq!(
+            buf.extract_selection_text(),
+            "HIST0\nHIST1\nHIST2\nLIVE0\nLIVE1"
+        );
+    }
+
+    #[test]
+    fn extract_is_view_independent() {
+        // The same absolute selection copies identically whether the view is
+        // scrolled to the top or sitting at the live bottom — this is the whole
+        // point of the fix (a top-to-bottom selection survives auto-scrolling).
+        let sel = |off| {
+            let mut b = make_buf(5, 20, &["HIST0", "HIST1", "HIST2"], &["LIVE0", "LIVE1"], off);
+            b.sel_anchor = Some((0, 0));
+            b.sel_focus = Some((4, 19));
+            b.extract_selection_text()
+        };
+        assert_eq!(sel(3), sel(0));
+        assert_eq!(sel(3), "HIST0\nHIST1\nHIST2\nLIVE0\nLIVE1");
+    }
+
+    #[test]
+    fn highlight_clipped_to_current_view() {
+        // Scrolled to the top: a history selection is on-screen and highlighted.
+        let mut top = make_buf(5, 20, &["HIST0", "HIST1", "HIST2"], &["LIVE0", "LIVE1"], 3);
+        top.sel_anchor = Some((0, 2));
+        top.sel_focus = Some((2, 4));
+        let rects = top.selection_rects_visible(20);
+        assert_eq!(rects.len(), 3, "rows 0,1,2 (the 3 history lines) highlighted");
+        assert_eq!(rects[0].row, 0);
+        assert_eq!(rects[2].row, 2);
+
+        // At the live bottom the same history selection is scrolled off → none.
+        let mut live = make_buf(5, 20, &["HIST0", "HIST1", "HIST2"], &["LIVE0", "LIVE1"], 0);
+        live.sel_anchor = Some((0, 2));
+        live.sel_focus = Some((2, 4));
+        assert!(live.selection_rects_visible(20).is_empty());
     }
 }

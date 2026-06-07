@@ -54,7 +54,8 @@ jobs:
             libfontconfig1-dev libfreetype6-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libgtk-3-dev
+            libgl1-mesa-dev libegl1-mesa-dev libgtk-3-dev \
+            libudev-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,6 +69,30 @@ jobs:
 
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build AppImage
+        if: matrix.name == 'linux-x86_64'
+        continue-on-error: true           # don't block the .tar.gz if AppImage fails
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"   # no FUSE needed in CI
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          wget -q -O linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O linuxdeploy-plugin-appimage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy linuxdeploy-plugin-appimage
+
+          install -Dm755 target/${{ matrix.target }}/release/meatshell AppDir/usr/bin/meatshell
+          install -Dm644 assets/meatshell.desktop          AppDir/usr/share/applications/meatshell.desktop
+          install -Dm644 assets/icon@512.png               AppDir/usr/share/icons/hicolor/512x512/apps/meatshell.png
+
+          # --output appimage already invokes the plugin; --plugin appimage is redundant and causes an error
+          ./linuxdeploy --appdir AppDir --output appimage
+
+          mv meatshell*.AppImage "meatshell-${VERSION}-linux-x86_64.AppImage"
+          echo "APPIMAGE=meatshell-${VERSION}-linux-x86_64.AppImage" >> "$GITHUB_ENV"
 
       - name: Package
         shell: bash
@@ -96,9 +121,23 @@ jobs:
           name: ${{ matrix.name }}
           path: ${{ env.ASSET }}
 
+      - name: Upload AppImage artifact
+        if: matrix.name == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-appimage
+          path: ${{ env.APPIMAGE }}
+
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ASSET }}
+          fail_on_unmatched_files: true
+
+      - name: Attach AppImage to GitHub Release
+        if: matrix.name == 'linux-x86_64' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APPIMAGE }}
           fail_on_unmatched_files: true

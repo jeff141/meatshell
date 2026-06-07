@@ -61,6 +61,53 @@ impl<'de> Deserialize<'de> for Secret {
     }
 }
 
+/// Which transport a session uses.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    /// SSH shell + SFTP (the original and default behaviour).
+    #[default]
+    Ssh,
+    /// Local serial port (COM3 / /dev/ttyUSB0) for switches, routers, MCUs (#14).
+    Serial,
+    /// Plain Telnet over TCP, for legacy network gear (#17).
+    Telnet,
+}
+
+impl SessionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionKind::Ssh => "ssh",
+            SessionKind::Serial => "serial",
+            SessionKind::Telnet => "telnet",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "serial" => SessionKind::Serial,
+            "telnet" => SessionKind::Telnet,
+            _ => SessionKind::Ssh,
+        }
+    }
+}
+
+fn default_baud() -> u32 {
+    115_200
+}
+fn default_data_bits() -> u8 {
+    8
+}
+fn default_stop_bits() -> u8 {
+    1
+}
+fn default_parity() -> String {
+    "none".to_string()
+}
+fn default_flow() -> String {
+    "none".to_string()
+}
+
 /// How a session authenticates.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +151,28 @@ pub struct Session {
     pub proxy: String,
     #[serde(default)]
     pub last_used: Option<String>,
+
+    // --- Transport ----------------------------------------------------------
+    /// SSH (default), Serial, or Telnet. Absent in old config files → Ssh.
+    #[serde(default)]
+    pub kind: SessionKind,
+
+    // --- Serial-only fields (ignored unless kind == Serial) -----------------
+    /// Serial device path, e.g. "COM3" (Windows) or "/dev/ttyUSB0" (Linux).
+    #[serde(default)]
+    pub serial_port: String,
+    #[serde(default = "default_baud")]
+    pub baud_rate: u32,
+    #[serde(default = "default_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: u8,
+    /// "none" | "odd" | "even".
+    #[serde(default = "default_parity")]
+    pub parity: String,
+    /// "none" | "hardware" | "software".
+    #[serde(default = "default_flow")]
+    pub flow_control: String,
 }
 
 impl Session {
@@ -119,6 +188,13 @@ impl Session {
             private_key_path: String::new(),
             proxy: String::new(),
             last_used: None,
+            kind: SessionKind::Ssh,
+            serial_port: String::new(),
+            baud_rate: default_baud(),
+            data_bits: default_data_bits(),
+            stop_bits: default_stop_bits(),
+            parity: default_parity(),
+            flow_control: default_flow(),
         }
     }
 }

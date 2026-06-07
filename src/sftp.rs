@@ -342,7 +342,11 @@ async fn run_sftp(
             }
 
             SftpCommand::Download { remote, local_dir } => {
-                let filename = base_name(&remote);
+                // Sanitize the server-supplied name before it touches the local
+                // filesystem (#26): a malicious server could otherwise craft a
+                // name with traversal, shell-special chars or a Windows reserved
+                // device name to write outside the chosen dir or hit a device.
+                let filename = sanitize_filename(&base_name(&remote));
                 let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), filename);
                 let id = Uuid::new_v4().to_string();
                 let _ = events.send(SessionEvent::SftpStatus(format!("{} {}...", t("下载", "Downloading"), filename)));
@@ -516,11 +520,13 @@ fn open_with_os(path: &str) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
-/// Make a remote-supplied file name safe to use as a *local* temp file name:
-/// drops path separators (defence-in-depth against traversal) and replaces
-/// characters that are invalid on Windows or special to shells with `_`.
-/// Normal names (letters, digits, `.`, `-`, `_`, spaces, Unicode) pass through
-/// unchanged.  Falls back to `file` when nothing usable remains.
+/// Make a remote-supplied file name safe to use as a *local* file name (for
+/// both downloads and temp files): drops path separators (defence-in-depth
+/// against traversal), replaces characters invalid on Windows or special to
+/// shells with `_`, trims surrounding whitespace and Windows' trailing dots,
+/// and neutralises reserved device names (CON, NUL, COM1…).  Normal names
+/// (letters, digits, `.`, `-`, `_`, Unicode) pass through; Unix dotfiles keep
+/// their leading dot.  Falls back to `file` when nothing usable remains.
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -531,10 +537,24 @@ fn sanitize_filename(name: &str) -> String {
             c => c,
         })
         .collect();
-    // Windows strips trailing dots/spaces; do it ourselves to avoid surprises.
-    let trimmed = cleaned.trim_end_matches([' ', '.']);
+    // Drop leading whitespace and trailing dots/spaces (Windows strips the
+    // latter silently). A leading dot is preserved so `.bashrc` survives.
+    let trimmed = cleaned.trim_start_matches(' ').trim_end_matches([' ', '.']);
     if trimmed.is_empty() {
-        "file".to_string()
+        return "file".to_string();
+    }
+    // Windows reserved device names are reserved case-insensitively and even
+    // with an extension ("CON.txt" still opens the console). A download named
+    // after one could read/write a device instead of a file, so prefix `_`.
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    let reserved = matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    );
+    if reserved {
+        format!("_{trimmed}")
     } else {
         trimmed.to_string()
     }
@@ -849,3 +869,63 @@ const _: fn() = || {
     let _ = format_mtime(0);
     let _: RemoteTreeNode;
 };
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn plain_names_pass_through() {
+        assert_eq!(sanitize_filename("report.txt"), "report.txt");
+        assert_eq!(sanitize_filename("my-file_v2.tar.gz"), "my-file_v2.tar.gz");
+        assert_eq!(sanitize_filename("数据.csv"), "数据.csv");
+        // Unix dotfiles keep their leading dot.
+        assert_eq!(sanitize_filename(".bashrc"), ".bashrc");
+    }
+
+    #[test]
+    fn strips_path_separators_and_traversal() {
+        // base_name already strips dirs, but sanitize is defence-in-depth: the
+        // result must never keep a separator that could escape the target dir.
+        assert_eq!(sanitize_filename("a/b\\c"), "a_b_c");
+        let traversal = sanitize_filename("../../etc/passwd");
+        assert!(!traversal.contains('/') && !traversal.contains('\\'));
+        let win = sanitize_filename("..\\..\\Windows\\System32");
+        assert!(!win.contains('/') && !win.contains('\\'));
+    }
+
+    #[test]
+    fn replaces_shell_and_windows_special_chars() {
+        assert_eq!(sanitize_filename("foo&calc.exe"), "foo_calc.exe");
+        assert_eq!(sanitize_filename("a|b>c<d:e?f*g"), "a_b_c_d_e_f_g");
+        assert_eq!(sanitize_filename("$(whoami)"), "_(whoami)");
+        assert_eq!(sanitize_filename("a`b'c"), "a_b_c");
+    }
+
+    #[test]
+    fn trims_whitespace_and_trailing_dots() {
+        assert_eq!(sanitize_filename("   spaced.txt  "), "spaced.txt");
+        assert_eq!(sanitize_filename("name..."), "name");
+        // control chars become underscores, not trimmed
+        assert_eq!(sanitize_filename("a\tb"), "a_b");
+    }
+
+    #[test]
+    fn neutralises_windows_reserved_device_names() {
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("nul"), "_nul");
+        assert_eq!(sanitize_filename("COM1"), "_COM1");
+        assert_eq!(sanitize_filename("LPT9.txt"), "_LPT9.txt"); // reserved even with ext
+        assert_eq!(sanitize_filename("Aux.log"), "_Aux.log");
+        // Not reserved: a name that merely starts with the same letters.
+        assert_eq!(sanitize_filename("console.txt"), "console.txt");
+        assert_eq!(sanitize_filename("COM10"), "COM10");
+    }
+
+    #[test]
+    fn empty_or_all_bad_falls_back() {
+        assert_eq!(sanitize_filename(""), "file");
+        assert_eq!(sanitize_filename("   "), "file");
+        assert_eq!(sanitize_filename("..."), "file");
+    }
+}

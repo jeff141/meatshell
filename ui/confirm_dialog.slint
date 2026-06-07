@@ -1,0 +1,119 @@
+import { Theme } from "theme.slint";
+import { GhostButton } from "widgets.slint";
+
+// A destructive (red) action button, matching PrimaryButton's shape.
+component DangerButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 30px;
+    min-width: 80px;
+    border-radius: Theme.radius-sm;
+    background: touch.pressed ? #c44a4a : (touch.has-hover ? #ec6a6a : Theme.danger);
+    animate background { duration: 120ms; }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: white;
+            font-size: Theme.fs-md;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// In-app modal confirmation dialog, styled to match the rest of meatshell
+// (a dark card over a dimmed backdrop, like SessionDialog).  Purely
+// presentational: it emits `confirm` / `cancel` and the caller decides what
+// to do.  Used for the irreversible SFTP delete (#28).
+export component ConfirmDialog inherits Rectangle {
+    in-out property <bool> is-open: false;
+    in property <string> title: @tr("Please confirm");
+    in property <string> message;
+    in property <string> detail;                  // optional, e.g. the file path
+    in property <string> confirm-label: @tr("Confirm");
+    callback confirm();
+    callback cancel();
+
+    visible: is-open;
+    background: #000000aa;
+
+    // Backdrop click cancels.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.cancel(); }
+    }
+
+    Rectangle {
+        width: 380px;
+        height: card.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg-panel;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000080;
+
+        // Swallow clicks inside the card so they don't hit the backdrop.
+        TouchArea { width: 100%; height: 100%; }
+
+        card := VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "⚠";
+                    color: Theme.danger;
+                    font-size: Theme.fs-xl;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.title;
+                    color: Theme.text-primary;
+                    font-size: Theme.fs-xl;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.message;
+                color: Theme.text-secondary;
+                font-size: Theme.fs-md;
+                wrap: word-wrap;
+            }
+
+            if root.detail != "" : Text {
+                text: root.detail;
+                color: Theme.text-primary;
+                font-family: Theme.font-mono;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                GhostButton {
+                    text: @tr("Cancel");
+                    clicked => { root.cancel(); }
+                }
+                DangerButton {
+                    text: root.confirm-label;
+                    clicked => { root.confirm(); }
+                }
+            }
+        }
+    }
+}
