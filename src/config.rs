@@ -317,10 +317,10 @@ impl ConfigStore {
         self.cache.language = lang;
     }
 
-    /// Slint UI style ("fluent" default).
+    /// Slint UI style ("native" default, matches build.rs).
     pub fn style(&self) -> &str {
         if self.cache.style.is_empty() {
-            "fluent"
+            "native"
         } else {
             &self.cache.style
         }

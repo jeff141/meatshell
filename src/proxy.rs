@@ -39,7 +39,7 @@ pub fn resolve(session_proxy: &str) -> Option<ProxyConfig> {
     if !s.is_empty() {
         return parse(s);
     }
-    for var in ["ALL_PROXY", "all_proxy"] {
+    for var in ["all_proxy", "ALL_PROXY"] {
         if let Ok(v) = std::env::var(var) {
             if !v.trim().is_empty() {
                 return parse(v.trim());

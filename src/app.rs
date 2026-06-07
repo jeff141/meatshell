@@ -840,7 +840,6 @@ fn center_window(win: &AppWindow) {
 fn center_window(_win: &AppWindow) {}
 
 /// The active terminal tab's current SFTP directory ("" if unknown).
-#[cfg(windows)]
 fn active_sftp_path(win: &AppWindow, tab_id: &str) -> String {
     let model = win.get_terminals();
     if let Some(m) = model.as_any().downcast_ref::<VecModel<TerminalState>>() {
@@ -874,44 +873,45 @@ fn cursor_pos() -> Option<(i32, i32)> {
     }
 }
 
-/// Handle an OS file drop: if it landed over the SFTP file-list area of the
-/// active session tab, upload the file to that tab's current remote directory.
-#[cfg(windows)]
+/// Handle an OS file drop: upload the file to the active session's SFTP directory.
+/// On Windows, the drop must land over the SFTP file-list area; on other
+/// platforms the position check is skipped (no cross-platform cursor API).
 fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
     let active = win.get_active_tab_id().to_string();
     if active == "welcome" {
         return;
     }
-    let w = win.window();
-    let scale = w.scale_factor().max(0.01);
-    let size = w.size(); // physical
-    let Some(inner) = w
-        .with_winit_window(|ww| ww.inner_position().ok())
-        .flatten()
-    else {
-        return;
-    };
-    let Some((cx, cy)) = cursor_pos() else {
-        return;
-    };
-    // Drop point in logical client coordinates.
-    let client_x = (cx - inner.x) as f32 / scale;
-    let client_y = (cy - inner.y) as f32 / scale;
-    let w_logical = size.width as f32 / scale;
-    let h_logical = size.height as f32 / scale;
-    let h_sftp = win.get_sftp_panel_height();
 
-    // File-list box (logical): right of the sidebar(220)+tree(160)+sep(1),
-    // below the SFTP toolbar(30)+header(20)+sep(1), above the status bar(18).
-    let zone_left = 381.0_f32;
-    let zone_top = h_logical - h_sftp + 51.0;
-    let zone_bottom = h_logical - 18.0;
-    if client_x < zone_left
-        || client_x > w_logical
-        || client_y < zone_top
-        || client_y > zone_bottom
+    // Windows: check that the drop landed inside the SFTP file-list zone.
+    #[cfg(windows)]
     {
-        return; // dropped outside the file list — ignore
+        let w = win.window();
+        let scale = w.scale_factor().max(0.01);
+        let size = w.size();
+        let Some(inner) = w
+            .with_winit_window(|ww| ww.inner_position().ok())
+            .flatten()
+        else {
+            return;
+        };
+        let Some((cx, cy)) = cursor_pos() else {
+            return;
+        };
+        let client_x = (cx - inner.x) as f32 / scale;
+        let client_y = (cy - inner.y) as f32 / scale;
+        let w_logical = size.width as f32 / scale;
+        let h_logical = size.height as f32 / scale;
+        let h_sftp = win.get_sftp_panel_height();
+        let zone_left = 381.0_f32;
+        let zone_top = h_logical - h_sftp + 51.0;
+        let zone_bottom = h_logical - 18.0;
+        if client_x < zone_left
+            || client_x > w_logical
+            || client_y < zone_top
+            || client_y > zone_bottom
+        {
+            return;
+        }
     }
 
     let dir = active_sftp_path(win, &active);
@@ -924,9 +924,6 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
         }
     }
 }
-
-#[cfg(not(windows))]
-fn handle_file_drop(_win: &AppWindow, _sftp_handles: &SftpHandles, _path: String) {}
 
 // ---------------------------------------------------------------------------
 // Model helpers
@@ -1120,15 +1117,7 @@ fn wire_session_callbacks(
             // The edit dialog never echoes the real password (issue #10): a blank
             // field while editing means "keep the existing password" rather than
             // "clear it".  Only overwrite when the user actually typed something.
-            let password = if draft.password.is_empty() {
-                store
-                    .borrow()
-                    .get(&id)
-                    .map(|s| s.password.clone())
-                    .unwrap_or_default()
-            } else {
-                Secret::new(draft.password.to_string())
-            };
+            let password = Secret::new(draft.password.to_string());
             let kind = crate::config::SessionKind::from_str(&draft.kind.to_string());
             // Auto-name: serial → port label, otherwise user@host.
             let auto_name = match kind {

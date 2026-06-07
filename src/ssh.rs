@@ -51,11 +51,11 @@ pub fn format_size(bytes: u64) -> String {
     if bytes < 1_024 {
         format!("{} B", bytes)
     } else if bytes < 1_024 * 1_024 {
-        format!("{:.1} KB", bytes as f64 / 1_024.0)
+        format!("{:.1} KiB", bytes as f64 / 1_024.0)
     } else if bytes < 1_024 * 1_024 * 1_024 {
-        format!("{:.1} MB", bytes as f64 / (1_024.0 * 1_024.0))
+        format!("{:.1} MiB", bytes as f64 / (1_024.0 * 1_024.0))
     } else {
-        format!("{:.2} GB", bytes as f64 / (1_024.0 * 1_024.0 * 1_024.0))
+        format!("{:.2} GiB", bytes as f64 / (1_024.0 * 1_024.0 * 1_024.0))
     }
 }
 
