@@ -218,42 +218,89 @@ const DARK: ThemeColors = ThemeColors {
     danger: "#e25c5c",
 };
 
-/// Detect whether the KDE desktop is using a light or dark color scheme by
-/// reading ~/.config/kdeglobals.  Returns "dark" or "light".
+/// Detect whether the OS desktop is using a light or dark theme.
+/// Supports Windows (registry), macOS (AppleInterfaceStyle), and Linux
+/// (freedesktop Portal via D-Bus).  Returns "dark" or "light".
 fn detect_system_theme() -> &'static str {
-    let Ok(home) = std::env::var("HOME") else { return "dark" };
-    let path = format!("{}/.config/kdeglobals", home);
-    let Ok(contents) = std::fs::read_to_string(&path) else { return "dark" };
-
-    // Find the [Colors:View] section and read the BackgroundNormal line.
-    let mut in_view = false;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed == "[Colors:View]" {
-            in_view = true;
-            continue;
-        }
-        if trimmed.starts_with('[') && in_view {
-            break; // left the section
-        }
-        if in_view {
-            if let Some(rest) = trimmed.strip_prefix("BackgroundNormal=") {
-                // Format: "R,G,B" e.g. "255,255,255"
-                let parts: Vec<u8> = rest
-                    .split(',')
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
-                if parts.len() >= 3 {
-                    // ITU-R BT.709 luminance
-                    let lum = parts[0] as f32 * 0.2126
-                            + parts[1] as f32 * 0.7152
-                            + parts[2] as f32 * 0.0722;
-                    return if lum > 128.0 { "light" } else { "dark" };
+    // --- Windows: AppsUseLightTheme registry value ---
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "/v",
+                "AppsUseLightTheme",
+            ])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Value line: "AppsUseLightTheme    REG_DWORD    0x0" (0=dark, 1=light)
+            if let Some(hex) = stdout.split("0x").nth(1) {
+                if let Ok(val) = u32::from_str_radix(hex.trim(), 16) {
+                    return if val == 0 { "dark" } else { "light" };
                 }
             }
         }
+        return "dark";
     }
-    "dark"
+
+    // --- macOS: AppleInterfaceStyle ---
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.trim() == "Dark" {
+                    return "dark";
+                }
+            }
+            // No value or exit code 1 → light mode
+            return "light";
+        }
+        return "light";
+    }
+
+    // --- Linux: freedesktop Portal (XDG spec, works on GNOME/KDE/Sway/…) ---
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.portal.Desktop",
+                "--print-reply",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Settings.Read",
+                "string:org.freedesktop.appearance",
+                "string:color-scheme",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // Output format: "   variant       uint32 1"
+                // 0 = no preference, 1 = dark, 2 = light
+                if let Some(val) = stdout.split("uint32").nth(1) {
+                    if let Ok(n) = val.trim().parse::<u32>() {
+                        return if n == 1 { "dark" } else { "light" };
+                    }
+                }
+            }
+        }
+        return "dark";
+    }
+
+    // Other platforms: default dark
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "dark"
+    }
 }
 
 fn colors_for(theme: &str) -> &'static ThemeColors {
@@ -2260,7 +2307,7 @@ fn wire_key_input(
             // events even if they arrive with shift=false.
             if key.as_str().is_empty() && shift && !ctrl && !alt {
                 *last_shift_time.lock().unwrap() = Some(std::time::Instant::now());
-                tracing::info!("[KEY_DIAG] lone-Shift recorded → timestamp saved");
+                tracing::debug!("[KEY_DIAG] lone-Shift recorded → timestamp saved");
             }
 
             // ── 拦截百度拼音注入的 Shift 标记字符（核心修复）────────────────────
@@ -2373,7 +2420,7 @@ fn wire_key_input(
             if key.as_str() == "\u{0008}" && !ctrl && !alt {
                 // Layer 1
                 if shift {
-                    tracing::info!("[KEY_DIAG] Backspace DROPPED by layer-1 (shift=true)");
+                    tracing::debug!("[KEY_DIAG] Backspace DROPPED by layer-1 (shift=true)");
                     return;
                 }
                 // Layer 2 — 时间窗口 1500ms
@@ -2399,10 +2446,10 @@ fn wire_key_input(
                 // Layer 3
                 #[cfg(windows)]
                 if !is_vk_back_down() {
-                    tracing::info!("[KEY_DIAG] Backspace DROPPED by layer-3 (VK_BACK not down)");
+                    tracing::debug!("[KEY_DIAG] Backspace DROPPED by layer-3 (VK_BACK not down)");
                     return;
                 }
-                tracing::info!("[KEY_DIAG] Backspace PASSED all filters → sent to PTY");
+                tracing::debug!("[KEY_DIAG] Backspace PASSED all filters → sent to PTY");
             }
 
             let bytes = key_to_pty_bytes(key.as_str(), ctrl, alt, app_cursor);
