@@ -97,6 +97,11 @@ export component AppWindow inherits Window {
     in-out property <string> ui-theme: "light";     // Color theme: light/dark/system
     in-out property <string> terminal-theme: "Dark";  // Terminal color scheme name
     in property <[string]> terminal-themes;          // Available terminal scheme names
+    in-out property <string> terminal-font: "Cascadia Mono"; // Current terminal font
+    in property <[string]> terminal-fonts;           // Available monospace fonts
+    in-out property <length> terminal-font-size: 13px; // Current terminal font size
+    callback set-terminal-font(string);              // switch terminal font
+    callback set-terminal-font-size(length);         // zoom terminal font
     in-out property <length> sftp-panel-height: 220px; // shared; lets Rust locate the drop zone
     callback pick-download-dir();            // open a folder picker
     callback open-download-dir();            // reveal the folder in the OS
@@ -271,6 +276,9 @@ export component AppWindow inherits Window {
                     is-alt-screen: term.is-alt-screen;
                     terminal-theme: root.terminal-theme;
                     terminal-themes: root.terminal-themes;
+                    terminal-font: root.terminal-font;
+                    terminal-fonts: root.terminal-fonts;
+                    terminal-font-size: root.terminal-font-size;
                     find-matches: term.find-matches;
                     selection: term.selection;
                     sftp-panel-height <=> root.sftp-panel-height;
@@ -299,6 +307,8 @@ export component AppWindow inherits Window {
                     copy-terminal-text() => { root.copy-terminal-text(term.id); }
                     clear-terminal() => { root.clear-terminal(term.id); }
                     set-terminal-theme(name) => { root.set-terminal-theme(name); }
+                    set-terminal-font(name) => { root.set-terminal-font(name); }
+                    set-terminal-font-size(sz) => { root.set-terminal-font-size(sz); }
                     find-query-changed(q) => { root.find-query-changed(term.id, q); }
                     terminal-scroll(d) => { root.terminal-scroll(term.id, d); }
                     select-start(r, c) => { root.term-select-start(term.id, r, c); }

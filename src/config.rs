@@ -237,6 +237,12 @@ pub struct ConfigFile {
     /// Terminal color scheme: "dark" (default), "light", "solarized-dark", etc.
     #[serde(default)]
     pub terminal_theme: String,
+    /// Terminal monospace font: "Cascadia Mono" (default).
+    #[serde(default)]
+    pub terminal_font: String,
+    /// Terminal font size in pixels (0 = use default 13px).
+    #[serde(default)]
+    pub terminal_font_size: f32,
 }
 
 pub struct ConfigStore {
@@ -465,6 +471,32 @@ impl ConfigStore {
 
     pub fn set_terminal_theme(&mut self, t: String) {
         self.cache.terminal_theme = t;
+    }
+
+    /// Terminal monospace font: "Cascadia Mono" (default).
+    pub fn terminal_font(&self) -> &str {
+        if self.cache.terminal_font.is_empty() {
+            "Cascadia Mono"
+        } else {
+            &self.cache.terminal_font
+        }
+    }
+
+    pub fn set_terminal_font(&mut self, f: String) {
+        self.cache.terminal_font = f;
+    }
+
+    /// Terminal font size in pixels (default 13).
+    pub fn terminal_font_size(&self) -> f32 {
+        if self.cache.terminal_font_size > 0.0 {
+            self.cache.terminal_font_size
+        } else {
+            13.0
+        }
+    }
+
+    pub fn set_terminal_font_size(&mut self, s: f32) {
+        self.cache.terminal_font_size = s;
     }
 
     pub fn save(&self) -> Result<()> {

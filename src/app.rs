@@ -106,6 +106,76 @@ type LocalSnap = Arc<Mutex<SystemSnapshot>>;
 // Slint generates types into this scope.
 slint::include_modules!();
 
+// ---------------------------------------------------------------------------
+// System monospace font detection
+// ---------------------------------------------------------------------------
+
+/// Detect monospace fonts available on the system.  "Cascadia Mono" is always
+/// first (embedded in the binary).  On Linux `fc-list` is used; on macOS
+/// `fc-list` or a built-in fallback list; on Windows a hardcoded common list.
+fn detect_system_fonts() -> Vec<String> {
+    let mut fonts = vec!["Cascadia Mono".to_string()];
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(out) = std::process::Command::new("fc-list")
+            .args([":spacing=mono", "family"])
+            .output()
+        {
+            if out.status.success() {
+                let mut seen = std::collections::HashSet::new();
+                seen.insert("Cascadia Mono".to_string());
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let name = line.trim().to_string();
+                    if !name.is_empty() && seen.insert(name.clone()) {
+                        fonts.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("fc-list")
+            .args([":spacing=mono", "family"])
+            .output()
+        {
+            if out.status.success() {
+                let mut seen = std::collections::HashSet::new();
+                seen.insert("Cascadia Mono".to_string());
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let name = line.trim().to_string();
+                    if !name.is_empty() && seen.insert(name.clone()) {
+                        fonts.push(name);
+                    }
+                }
+            }
+        }
+        // macOS built-in monospace fonts as fallback if fc-list is absent
+        if fonts.len() == 1 {
+            for f in ["Menlo", "Monaco", "SF Mono", "Courier New"] {
+                fonts.push(f.to_string());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for f in [
+            "Consolas",
+            "Cascadia Mono",
+            "Lucida Console",
+            "Courier New",
+        ] {
+            fonts.push(f.to_string());
+        }
+    }
+
+    fonts.dedup();
+    fonts
+}
+
 /// vt100 default foreground colour — updated by the theme engine so the
 /// terminal text remains readable on both light and dark backgrounds.
 static VT_DEFAULT_FG: std::sync::Mutex<(u8, u8, u8)> =
@@ -495,6 +565,12 @@ pub fn run() -> Result<()> {
         .collect();
     window.set_terminal_themes(ModelRc::from(Rc::new(VecModel::from(theme_names))));
 
+    // Populate system monospace font list.
+    let font_names: Vec<SharedString> = detect_system_fonts().into_iter().map(|f| f.into()).collect();
+    window.set_terminal_fonts(ModelRc::from(Rc::new(VecModel::from(font_names))));
+    window.set_terminal_font(store.borrow().terminal_font().into());
+    window.set_terminal_font_size(store.borrow().terminal_font_size().into());
+
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
     sync_sessions_to_model(&store.borrow(), &sessions_model);
@@ -651,6 +727,34 @@ pub fn run() -> Result<()> {
                     });
                 }
             }
+        });
+    }
+
+    // Terminal font switcher: saves to config, font change takes effect
+    // immediately via Slint property binding (cell-probe + spans re-render).
+    {
+        let store = store.clone();
+        window.on_set_terminal_font(move |font| {
+            let font_str = font.to_string();
+            {
+                let mut s = store.borrow_mut();
+                s.set_terminal_font(font_str.clone());
+                let _ = s.save();
+            }
+            // The terminal-font property is set from app.slint, which drives
+            // both cell-probe and span rendering.  No explicit re-render needed
+            // — Slint's property binding handles the update.
+        });
+    }
+
+    // Terminal font size zoom: Ctrl+wheel triggers this.
+    {
+        let store = store.clone();
+        window.on_set_terminal_font_size(move |size| {
+            let px: f32 = size.into();
+            let mut s = store.borrow_mut();
+            s.set_terminal_font_size(px);
+            let _ = s.save();
         });
     }
 

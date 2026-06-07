@@ -109,9 +109,14 @@ export component TerminalView inherits Rectangle {
     callback select-end();                  // finish selection → copy to clipboard
     callback select-autoscroll(int);        // auto-scroll while dragging past edge (dir: -1 up / +1 down)
     callback set-terminal-theme(string);    // apply a named terminal color scheme
+    callback set-terminal-font(string);     // switch terminal monospace font
 
     in property <string> terminal-theme: "Dark";  // current terminal scheme name
     in property <[string]> terminal-themes;        // list of available scheme names
+    in property <string> terminal-font: "Cascadia Mono";  // current terminal font
+    in property <[string]> terminal-fonts;         // list of available fonts
+    in property <length> terminal-font-size: 13px; // current terminal font size
+    callback set-terminal-font-size(length);       // zoom terminal font
 
     // Right-click context-menu anchor + find-bar visibility (private UI state).
     property <length> ctx-x;
@@ -119,6 +124,7 @@ export component TerminalView inherits Rectangle {
     property <bool> find-active: false;
     property <bool> selecting: false;
     property <bool> show-theme-menu: false; // true = show theme submenu, false = main menu
+    property <bool> show-font-menu: false;  // true = show font submenu, false = main menu
     property <bool> ctx-open: false;        // right-click menu visibility
     // Auto-scroll direction while drag-selecting past the visible edge.
     // 0 = none, -1 = above top (scroll to older), +1 = below bottom (newer).
@@ -149,8 +155,8 @@ export component TerminalView inherits Rectangle {
     // cell-w that is too narrow and a term-cols that is too large.
     cell-probe := Text {
         text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM"; // exactly 50×M
-        font-family: "Cascadia Mono";
-        font-size: Theme.fs-md;
+        font-family: root.terminal-font;
+        font-size: root.terminal-font-size;
         // Keep it in layout but invisible: opacity:0 forces full font loading.
         opacity: 0;
         // Park it at y<0 so it never overlaps terminal content.
@@ -316,6 +322,7 @@ export component TerminalView inherits Rectangle {
                                         root.ctx-x = self.mouse-x;
                                         root.ctx-y = self.mouse-y;
                                         root.show-theme-menu = false;
+                                        root.show-font-menu = false;
                                         root.ctx-open = true;
                                     } else if (ev.button == PointerEventButton.left) {
                                         root.selecting = true;
@@ -358,12 +365,18 @@ export component TerminalView inherits Rectangle {
                                 }
                             }
                             scroll-event(ev) => {
-                                // Wheel scrolls the scrollback history (~3 lines
-                                // per notch).  Positive delta-y = scroll up = older.
-                                // In alt-screen mode (vim/nano/btop) the program
-                                // handles scroll itself — suppress our history scroll
-                                // so the full-screen UI isn't pushed out of view.
-                                if (!root.is-alt-screen) {
+                                // Ctrl+wheel = zoom terminal font size.
+                                if (ev.modifiers.control || ev.modifiers.meta) {
+                                    let delta = ev.delta-y > 0 ? 1px : -1px;
+                                    let new-size = clamp(root.terminal-font-size + delta, 8px, 28px);
+                                    if (new-size != root.terminal-font-size) {
+                                        root.set-terminal-font-size(new-size);
+                                    }
+                                } else if (!root.is-alt-screen) {
+                                    // Wheel scrolls the scrollback history (~3 lines
+                                    // per notch).  Positive delta-y = scroll up = older.
+                                    // In alt-screen mode (vim/nano/btop) the program
+                                    // handles scroll itself — suppress our history scroll.
                                     root.terminal-scroll(ev.delta-y > 0 ? 3 : -3);
                                 }
                                 accept
@@ -406,8 +419,8 @@ export component TerminalView inherits Rectangle {
                                 y: 0px;
                                 text: span.text;
                                 color: span.fg;
-                                font-family: "Cascadia Mono";
-                                font-size: Theme.fs-md;
+                                font-family: root.terminal-font;
+                                font-size: root.terminal-font-size;
                                 font-weight: span.bold ? 700 : 400;
                             }
                         }
@@ -445,7 +458,9 @@ export component TerminalView inherits Rectangle {
                                 width: 164px;
                                 height: root.show-theme-menu
                                     ? ((1 + root.terminal-themes.length) * 28 + 8) * 1px
-                                    : (5 * 28 + 8) * 1px;
+                                    : root.show-font-menu
+                                    ? ((1 + root.terminal-fonts.length) * 28 + 8) * 1px
+                                    : (6 * 28 + 8) * 1px;
                                 background: Theme.bg-panel;
                                 border-radius: Theme.radius-sm;
                                 border-width: 1px;
@@ -505,8 +520,56 @@ export component TerminalView inherits Rectangle {
                                     }
                                 }
 
+                                // --- Font submenu ---
+                                if root.show-font-menu : VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 1px;
+                                    Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: font-back-ta.has-hover ? Theme.bg-hover : transparent;
+                                        font-back-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.show-font-menu = false; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { text: "\u{E314}"; font-family: "Material Icons";
+                                                   color: Theme.text-secondary; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                            Text { text: @tr("Back");
+                                                   color: Theme.text-primary; font-size: Theme.fs-md;
+                                                   vertical-alignment: center; horizontal-stretch: 1; }
+                                        }
+                                    }
+                                    for fname in root.terminal-fonts : Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: font-ta.has-hover ? Theme.bg-hover : transparent;
+                                        font-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-terminal-font(fname); root.ctx-open = false; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 6px;
+                                            if fname == root.terminal-font : Text {
+                                                text: "\u{E5CA}"; font-family: "Material Icons";
+                                                color: Theme.accent; font-size: Theme.fs-sm;
+                                                vertical-alignment: center;
+                                            }
+                                            Text { text: fname;
+                                                   color: fname == root.terminal-font ? Theme.accent : Theme.text-primary;
+                                                   font-size: Theme.fs-sm;
+                                                   vertical-alignment: center;
+                                                   horizontal-stretch: 1; }
+                                        }
+                                    }
+                                }
+
                                 // --- Main menu ---
-                                if !root.show-theme-menu : VerticalLayout {
+                                if !root.show-theme-menu && !root.show-font-menu : VerticalLayout {
                                     padding: 4px;
                                     spacing: 1px;
                                     // Terminal theme at top
@@ -525,6 +588,29 @@ export component TerminalView inherits Rectangle {
                                                    color: Theme.text-secondary; font-size: Theme.fs-sm;
                                                    vertical-alignment: center; }
                                             Text { text: @tr("Terminal theme");
+                                                   color: Theme.text-primary; font-size: Theme.fs-md;
+                                                   vertical-alignment: center; horizontal-stretch: 1; }
+                                            Text { text: "\u{E315}"; font-family: "Material Icons";
+                                                   color: Theme.text-muted; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                        }
+                                    }
+                                    // Terminal font selector
+                                    Rectangle {
+                                        height: 28px;
+                                        border-radius: Theme.radius-sm;
+                                        background: fm-ta.has-hover ? Theme.bg-hover : transparent;
+                                        fm-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.show-font-menu = true; }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            spacing: 8px;
+                                            Text { text: "\u{E167}"; font-family: "Material Icons";
+                                                   color: Theme.text-secondary; font-size: Theme.fs-sm;
+                                                   vertical-alignment: center; }
+                                            Text { text: @tr("Terminal font");
                                                    color: Theme.text-primary; font-size: Theme.fs-md;
                                                    vertical-alignment: center; horizontal-stretch: 1; }
                                             Text { text: "\u{E315}"; font-family: "Material Icons";
