@@ -734,6 +734,7 @@ pub fn run() -> Result<()> {
     // immediately via Slint property binding (cell-probe + spans re-render).
     {
         let store = store.clone();
+        let weak = window.as_weak();
         window.on_set_terminal_font(move |font| {
             let font_str = font.to_string();
             {
@@ -741,20 +742,26 @@ pub fn run() -> Result<()> {
                 s.set_terminal_font(font_str.clone());
                 let _ = s.save();
             }
-            // The terminal-font property is set from app.slint, which drives
-            // both cell-probe and span rendering.  No explicit re-render needed
-            // — Slint's property binding handles the update.
+            if let Some(w) = weak.upgrade() {
+                w.set_terminal_font(font_str.into());
+            }
         });
     }
 
     // Terminal font size zoom: Ctrl+wheel triggers this.
     {
         let store = store.clone();
+        let weak = window.as_weak();
         window.on_set_terminal_font_size(move |size| {
             let px: f32 = size.into();
-            let mut s = store.borrow_mut();
-            s.set_terminal_font_size(px);
-            let _ = s.save();
+            {
+                let mut s = store.borrow_mut();
+                s.set_terminal_font_size(px);
+                let _ = s.save();
+            }
+            if let Some(w) = weak.upgrade() {
+                w.set_terminal_font_size(size);
+            }
         });
     }
 
