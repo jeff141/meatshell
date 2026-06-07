@@ -1,16 +1,34 @@
 //! Session / application configuration.
 //!
 //! Persists a simple JSON file under the platform's standard config dir
-//! (e.g. `%APPDATA%/meatshell/sessions.json` on Windows).
+//! (e.g. `%APPDATA%/meatshell/sessions.json` on Windows,
+//!  `~/.config/meatshell/sessions.json` on Linux/macOS).
 //!
-//! The password field is stored in plain text for v0.1; a proper OS keychain
-//! integration is tracked for a later iteration.
+//! ## Password encryption
+//!
+//! Passwords are **not** stored in plaintext.  On first launch a random
+//! 256-bit key is written to `secret.key` in the same config directory
+//! (mode `0600` on Unix).  Every non-empty password is then encrypted with
+//! **ChaCha20-Poly1305** (a random 96-bit nonce per value) and stored as
+//!
+//! ```text
+//! enc:v1:<base64url(nonce_12_bytes || ciphertext)>
+//! ```
+//!
+//! Legacy plaintext passwords (from older installs) are left untouched in
+//! memory and silently re-encrypted the next time the config is saved.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chacha20poly1305::{
+    aead::{Aead, AeadCore, KeyInit},
+    ChaCha20Poly1305,
+};
 use directories::ProjectDirs;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -210,7 +228,7 @@ pub struct ConfigFile {
     /// UI language code: "zh" (default) or "en".
     #[serde(default)]
     pub language: String,
-    /// Slint UI style: "fluent" (default), "native", "cosmic", "material", "cupertino".
+    /// Slint UI style: "native" (default), "fluent", "cosmic".
     #[serde(default)]
     pub style: String,
     /// Color theme: "light" (default), "dark", or "system".
@@ -224,25 +242,117 @@ pub struct ConfigFile {
 pub struct ConfigStore {
     path: PathBuf,
     cache: ConfigFile,
+    /// ChaCha20-Poly1305 key loaded from (or freshly generated into)
+    /// `secret.key` in the same directory as `sessions.json`.
+    key: [u8; 32],
 }
 
 impl ConfigStore {
+    /// The prefix that marks an encrypted password blob in sessions.json.
+    const ENC_PREFIX: &'static str = "enc:v1:";
+
+    // ── Encryption helpers ────────────────────────────────────────────────
+
+    /// Encrypt `plaintext` with ChaCha20-Poly1305 and return
+    /// `"enc:v1:<base64url(nonce_12_bytes || ciphertext)>"`.
+    fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<String> {
+        let cipher = ChaCha20Poly1305::new(key.into());
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 12 random bytes
+        let ciphertext = cipher
+            .encrypt(&nonce, plaintext.as_bytes())
+            .map_err(|e| anyhow::anyhow!("password encrypt error: {e}"))?;
+        let mut blob = nonce.to_vec();
+        blob.extend_from_slice(&ciphertext);
+        Ok(format!("{}{}", Self::ENC_PREFIX, URL_SAFE_NO_PAD.encode(&blob)))
+    }
+
+    /// Try to decrypt a value produced by [`Self::encrypt`].
+    /// Returns `None` if the string is not an encrypted blob (e.g. a legacy
+    /// plaintext value, an empty string, or a tampered/corrupt blob).
+    fn try_decrypt(key: &[u8; 32], s: &str) -> Option<String> {
+        let b64 = s.strip_prefix(Self::ENC_PREFIX)?;
+        let blob = URL_SAFE_NO_PAD.decode(b64).ok()?;
+        if blob.len() < 12 {
+            return None;
+        }
+        let (nonce_bytes, ciphertext) = blob.split_at(12);
+        let cipher = ChaCha20Poly1305::new(key.into());
+        let nonce = chacha20poly1305::Nonce::from_slice(nonce_bytes);
+        let plain = cipher.decrypt(nonce, ciphertext).ok()?;
+        String::from_utf8(plain).ok()
+    }
+
+    // ── Key file management ───────────────────────────────────────────────
+
+    /// Load the 32-byte key from `<config_dir>/secret.key`, or generate and
+    /// persist a fresh one.  On Unix the key file is created with mode `0600`
+    /// so other local accounts cannot read it.  On Windows files in `%APPDATA%`
+    /// are already restricted to the owning user by default ACLs.
+    fn load_or_create_key(config_dir: &Path) -> Result<[u8; 32]> {
+        use rand::RngCore as _;
+        let key_path = config_dir.join("secret.key");
+
+        if key_path.exists() {
+            let bytes = fs::read(&key_path)
+                .with_context(|| format!("failed to read {}", key_path.display()))?;
+            if bytes.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes);
+                return Ok(key);
+            }
+            tracing::warn!("secret.key has wrong length — regenerating");
+        }
+
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        fs::write(&key_path, &key)
+            .with_context(|| format!("failed to write {}", key_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("failed to set permissions on {}", key_path.display())
+                })?;
+        }
+        tracing::info!("generated new encryption key at {}", key_path.display());
+        Ok(key)
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────
+
     /// Load (or initialise) the config file. On any parse error we back up the
     /// broken file and start fresh — losing saved sessions is better than
     /// crashing at launch.
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create config dir {}", parent.display())
-            })?;
-        }
+        let config_dir = path
+            .parent()
+            .context("config path has no parent directory")?
+            .to_path_buf();
+
+        fs::create_dir_all(&config_dir).with_context(|| {
+            format!("failed to create config dir {}", config_dir.display())
+        })?;
+
+        let key = Self::load_or_create_key(&config_dir)?;
 
         let cache = if path.exists() {
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             match serde_json::from_str::<ConfigFile>(&raw) {
-                Ok(cfg) => cfg,
+                Ok(mut cfg) => {
+                    // Decrypt any encrypted passwords; leave legacy plaintext
+                    // values untouched (they will be encrypted on next save).
+                    for session in &mut cfg.sessions {
+                        if let Some(plain) =
+                            Self::try_decrypt(&key, session.password.as_str())
+                        {
+                            session.password = Secret::new(plain);
+                        }
+                    }
+                    cfg
+                }
                 Err(err) => {
                     let backup = path.with_extension("json.broken");
                     let _ = fs::rename(&path, &backup);
@@ -257,7 +367,7 @@ impl ConfigStore {
             ConfigFile::default()
         };
 
-        Ok(Self { path, cache })
+        Ok(Self { path, cache, key })
     }
 
     fn config_path() -> Result<PathBuf> {
@@ -358,11 +468,20 @@ impl ConfigStore {
     }
 
     pub fn save(&self) -> Result<()> {
-        let raw = serde_json::to_string_pretty(&self.cache)?;
-        // Write to a sibling temp file then rename — cheap atomicity on most
-        // platforms. Good enough for a config file.
+        // Build a disk copy where every non-empty password is encrypted.
+        let mut disk = self.cache.clone();
+        for session in &mut disk.sessions {
+            if !session.password.is_empty()
+                && !session.password.as_str().starts_with(Self::ENC_PREFIX)
+            {
+                let enc = Self::encrypt(&self.key, session.password.as_str())?;
+                session.password = Secret::new(enc);
+            }
+        }
+        let raw = serde_json::to_string_pretty(&disk)?;
+        // Write to a sibling temp file then rename — cheap atomicity.
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, raw)
+        fs::write(&tmp, &raw)
             .with_context(|| format!("failed to write {}", tmp.display()))?;
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("failed to finalise {}", self.path.display()))?;

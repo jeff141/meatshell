@@ -1,5 +1,14 @@
 // Central design tokens for meatshell.
-// Keep these aligned with docs/UI guidelines.
+//
+// All colour values are reactive: change `dark` and every widget repaints
+// automatically via Slint's property-binding system.
+//
+// Dark palette  — high-contrast charcoal (original meatshell look).
+// Light palette — Apple macOS-inspired:
+//   • Backgrounds use #f5f5f7 (Apple page gray) instead of pure white to
+//     avoid eye-strain.
+//   • Primary text is #1d1d1f (Apple near-black) not #000000.
+//   • Accent is #0071e3 (Apple blue), consistent across both themes.
 
 export global Theme {
     // --- Palette (mutable — switched at runtime by the Rust theme engine) ---

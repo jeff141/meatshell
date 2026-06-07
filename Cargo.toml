@@ -45,6 +45,12 @@ base64 = "0.22"
 # Opens COM3 / /dev/ttyUSB0 etc.; on Linux the default `libudev` feature is
 # used for port enumeration (CI installs libudev-dev).
 serialport = "4"
+# ChaCha20-Poly1305 AEAD for encrypting passwords at rest in sessions.json.
+# rand (OsRng) and base64 are already pulled in by other deps above.
+chacha20poly1305 = "0.10"
+# Detect whether the OS is running in dark or light mode.
+# Used on startup to honour the system preference before the user overrides it.
+dark-light = "1"
 
 # Decode the embedded PNG icon to set the window icon at runtime (Linux only).
 # On Windows the icon comes from the .ico embedded by winresource at link time;

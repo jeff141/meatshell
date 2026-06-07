@@ -93,10 +93,10 @@ export component AppWindow inherits Window {
     in property <[TransferInfo]> transfers; // download/upload records (newest first)
     in property <[string]> about-libs;      // open-source libraries used
     in-out property <bool> lang-en: false;  // current UI language (false = 中文)
-    in-out property <string> ui-style: "fluent";  // Slint UI style
-    in-out property <string> ui-theme: "light";   // Color theme: light/dark/system
+    in-out property <string> ui-style: "native";    // Slint UI style
+    in-out property <string> ui-theme: "light";     // Color theme: light/dark/system
     in-out property <string> terminal-theme: "Dark";  // Terminal color scheme name
-    in property <[string]> terminal-themes;        // Available terminal scheme names
+    in property <[string]> terminal-themes;          // Available terminal scheme names
     in-out property <length> sftp-panel-height: 220px; // shared; lets Rust locate the drop zone
     callback pick-download-dir();            // open a folder picker
     callback open-download-dir();            // reveal the folder in the OS
@@ -310,7 +310,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    // --- Top-right buttons: [下载] [设置] (设置 on the far right) ----------
+    // --- Top-right buttons: [☀/🌙 theme] [↓ download] [⚙ settings] ----------
     // Settings (gear) — far right.
     Rectangle {
         x: root.width - 34px;
@@ -354,6 +354,28 @@ export component AppWindow inherits Window {
             text: "\u{E2C4}";              // Material Icons file_download
             font-family: "Material Icons";
             color: Theme.text-secondary;
+            font-size: Theme.fs-md;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    // Theme toggle (sun = currently dark → click for light;
+    //               moon = currently light → click for dark) — left of download.
+    Rectangle {
+        x: root.width - 94px;
+        y: 8px;
+        width: 26px;
+        height: 26px;
+        border-radius: Theme.radius-sm;
+        background: theme-ta.has-hover ? Theme.bg-hover : transparent;
+        theme-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.cycle-theme(); }
+        }
+        Text {
+            text: root.ui-theme == "dark" ? "\u{E518}" : "\u{E51C}";
+            font-family: "Material Icons";
+            color: root.ui-theme == "dark" ? #f5c542 : #5856d6;  // amber sun / indigo moon
             font-size: Theme.fs-md;
             horizontal-alignment: center;
             vertical-alignment: center;
