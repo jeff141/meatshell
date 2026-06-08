@@ -2580,6 +2580,23 @@ fn key_to_pty_bytes(key: &str, ctrl: bool, alt: bool, app_cursor: bool) -> Vec<u
         return vec![];
     }
 
+    // --- Slint modifier key codes — never forward to PTY -------------------
+    // Slint encodes bare modifier keys as C0 control characters:
+    //   Shift=0x10, Ctrl=0x11, Alt=0x12, AltGr=0x13, CapsLock=0x14,
+    //   ShiftR=0x15, CtrlR=0x16, Meta=0x17, MetaR=0x18
+    // When the user presses Alt alone, key="\u{0012}" with alt=true reaches
+    // the Alt+key branch below, which prefixes it with ESC (0x1b) and sends
+    // both bytes to the PTY.  Bash/readline interprets the leading ESC as
+    // an interrupt and discards the current input line — the "Alt clears the
+    // command" bug.  The same applies to the other modifier key codes: they
+    // must never be sent to the remote terminal.
+    if let Some(c) = key.chars().next() {
+        let cp = c as u32;
+        if key.chars().count() == 1 && (0x10..=0x18).contains(&cp) {
+            return vec![];
+        }
+    }
+
     // --- Ctrl + letter: synthesise C0 control character --------------------
     // Two cases:
     //   A) Platform already encoded the control char in `key` (e.g. "\x18" for
