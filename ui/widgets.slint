@@ -37,18 +37,21 @@ export component PrimaryButton inherits Rectangle {
     in property <bool> disabled: false;
     callback clicked();
 
-    height: 30px;
-    min-width: 80px;
-    border-radius: Theme.radius-sm;
+    height: 36px;
+    min-width: 88px;
+    border-radius: Theme.radius-xl;   // Material pill button
     background: disabled
         ? Theme.bg-elevated
         : (touch.pressed ? Theme.accent-pressed
            : (touch.has-hover ? Theme.accent-hover : Theme.accent));
-    animate background { duration: 120ms; }
+    animate background { duration: 150ms; easing: ease-out; }
+    drop-shadow-blur: touch.has-hover && !disabled ? 6px : 2px;
+    drop-shadow-color: disabled ? transparent : Theme.accent.with-alpha(0.35);
+    drop-shadow-offset-y: 1px;
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
         alignment: center;
         Text {
             text: root.text;
@@ -71,23 +74,24 @@ export component GhostButton inherits Rectangle {
     in property <string> text;
     callback clicked();
 
-    height: 30px;
-    min-width: 80px;
-    border-radius: Theme.radius-sm;
+    height: 36px;
+    min-width: 88px;
+    border-radius: Theme.radius-xl;   // Material pill button
     border-width: 1px;
     border-color: touch.has-hover ? Theme.border-strong : Theme.border-subtle;
     background: touch.pressed ? Theme.bg-active
         : (touch.has-hover ? Theme.bg-hover : Theme.bg-panel);
-    animate background, border-color { duration: 120ms; }
+    animate background, border-color { duration: 150ms; easing: ease-out; }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
         alignment: center;
         Text {
             text: root.text;
             color: Theme.text-primary;
             font-size: Theme.fs-md;
+            font-weight: 500;
             vertical-alignment: center;
         }
     }
@@ -110,19 +114,21 @@ export component LabeledInput inherits VerticalLayout {
         text: label;
         color: Theme.text-secondary;
         font-size: Theme.fs-sm;
+        font-weight: 500;
     }
 
     Rectangle {
-        height: 32px;
-        border-radius: Theme.radius-sm;
-        border-width: 1px;
+        height: 40px;
+        border-radius: Theme.radius-md;
+        border-width: 1.5px;
         border-color: input.has-focus ? Theme.accent : Theme.border-subtle;
         background: Theme.bg-root;
+        animate border-color { duration: 150ms; }
 
         input := TextInput {
-            x: 10px;
+            x: 12px;
             y: 0px;
-            width: parent.width - 20px;
+            width: parent.width - 24px;
             height: parent.height;
             text <=> root.value;
             color: Theme.text-primary;
@@ -138,7 +144,7 @@ export component LabeledInput inherits VerticalLayout {
 
         // Lightweight placeholder — shown when value is empty.
         if value == "" : Text {
-            x: 10px;
+            x: 12px;
             y: 0px;
             height: parent.height;
             text: placeholder;

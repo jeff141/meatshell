@@ -283,11 +283,9 @@ export component SftpPanel inherits Rectangle {
 
                         for node[i] in root.tree-nodes : Rectangle {
                             height: 22px;
-                            background: node-ta.has-hover
-                                ? Theme.bg-hover
-                                : (node.path == root.current-path
-                                    ? #4a90e230
-                                    : (mod(i, 2) == 0 ? transparent : #ffffff08));
+                            background: node.path == root.current-path
+                                ? Theme.accent.with-alpha(0.20)
+                                : (node-ta.has-hover ? Theme.bg-hover : transparent);
 
                             node-ta := TouchArea {
                                 mouse-cursor: pointer;
@@ -384,10 +382,8 @@ export component SftpPanel inherits Rectangle {
                             for entry[i] in root.entries : row := Rectangle {
                                 height: 24px;
                                 background: i == root.selected-row
-                                    ? #4a90e240
-                                    : (row-ta.has-hover
-                                        ? #4a90e225
-                                        : (mod(i, 2) == 0 ? transparent : #ffffff08));
+                                    ? Theme.accent.with-alpha(0.24)
+                                    : (row-ta.has-hover ? Theme.accent.with-alpha(0.12) : transparent);
 
                                 row-ta := TouchArea {
                                     mouse-cursor: pointer;

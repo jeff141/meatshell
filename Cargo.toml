@@ -10,7 +10,11 @@ readme = "README.md"
 rust-version = "1.75"
 
 [dependencies]
-slint = { version = "1.8", features = ["compat-1-2"] }
+slint = { version = "1.8", features = ["compat-1-2", "log"] }
+# Route Slint's ICU4X/text diagnostics through the `log` crate so the
+# `init_log_filter()` logger in main.rs can drop the harmless "No segmentation
+# model for language: ja" spam (Slint #11604) instead of it hitting stderr raw.
+log = "0.4"
 # Direct access to the winit window/events (OS file-drop for drag-and-drop upload).
 i-slint-backend-winit = "1.16"
 serde = { version = "1", features = ["derive"] }

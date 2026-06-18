@@ -33,7 +33,7 @@ component StatRow inherits HorizontalLayout {
     // Progress bar — stretches to fill the row, with a floor so it stays usable.
     Rectangle {
         background: Theme.bg-root;
-        border-radius: 2px;
+        border-radius: 4px;
         horizontal-stretch: 2;
         min-width: 60px;
 
@@ -43,7 +43,7 @@ component StatRow inherits HorizontalLayout {
             height: parent.height;
             width: parent.width * clamp(percent, 0.0, 1.0);
             background: bar-color;
-            border-radius: 2px;
+            border-radius: 4px;
             animate width { duration: 500ms; easing: ease-out; }
         }
 
@@ -381,7 +381,7 @@ export component Sidebar inherits Rectangle {
                     spacing: 1px;
                     for d[i] in root.disks : Rectangle {
                         height: 20px;
-                        border-radius: 2px;
+                        border-radius: 4px;
                         clip: true;
 
                         // Per-row hover sensor: i is the exact data index.
