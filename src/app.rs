@@ -941,6 +941,11 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
     if active == "welcome" {
         return;
     }
+    // When the SFTP panel is minimised (toolbar only, ~30px tall) there is no
+    // usable file-list area — silently ignore the drop.
+    if win.get_sftp_collapsed() {
+        return;
+    }
     let w = win.window();
     let scale = w.scale_factor().max(0.01);
     let size = w.size(); // physical
@@ -960,11 +965,13 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
     let h_logical = size.height as f32 / scale;
     let h_sftp = win.get_sftp_panel_height();
 
-    // File-list box (logical): right of the sidebar(220)+tree(160)+sep(1),
-    // below the SFTP toolbar(30)+header(20)+sep(1), above the status bar(18).
-    let zone_left = 381.0_f32;
-    let zone_top = h_logical - h_sftp + 51.0;
-    let zone_bottom = h_logical - 18.0;
+    // File-list box (logical): the SFTP tree pane is always 160px; the sidebar
+    // collapses to 0px when hidden.  The 1px accounts for the vertical
+    // separator between tree and file list.
+    let sidebar_w = if win.get_sidebar_collapsed() { 0.0 } else { 220.0 };
+    let zone_left = sidebar_w + 161.0; // sidebar + tree(160) + sep(1)
+    let zone_top = h_logical - h_sftp + 51.0;   // toolbar(30)+col-hdr(20)+sep(1)
+    let zone_bottom = h_logical - 18.0;          // above SFTP status bar
     if client_x < zone_left
         || client_x > w_logical
         || client_y < zone_top
@@ -997,6 +1004,9 @@ fn handle_file_drop(win: &AppWindow, sftp_handles: &SftpHandles, path: String) {
             }
         }
     }
+    // Pop the transfers panel so upload progress is visible (mirrors the
+    // behaviour already in place for downloads).
+    win.set_download_open(true);
 }
 
 #[cfg(not(windows))]
@@ -3077,6 +3087,7 @@ fn wire_sftp_callbacks(
                             .collect()
                     })
                     .unwrap_or_default();
+                let weak_for_thread = weak.clone();
                 std::thread::spawn(move || {
                     // The remote SFTP upload handles a file or a whole directory;
                     // only the local picker differs (#85). Folder uploads one dir;
@@ -3115,6 +3126,8 @@ fn wire_sftp_callbacks(
                             }
                         }
                     }
+                    // Pop the transfers panel so upload progress is visible.
+                    let _ = weak_for_thread.upgrade_in_event_loop(|w| w.set_download_open(true));
                 });
             },
         );
