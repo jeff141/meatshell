@@ -34,16 +34,18 @@ component SegOption inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked();
-    height: 30px;
+    height: 34px;
     horizontal-stretch: 1;
-    border-radius: Theme.radius-sm;
+    border-radius: Theme.radius-xl;   // pill shape for segmented controls
     border-width: 1px;
     background: active ? Theme.accent : Theme.bg-root;
     border-color: active ? Theme.accent : Theme.border-subtle;
+    animate background, border-color { duration: 150ms; }
     Text {
         text: root.label;
         color: active ? white : Theme.text-primary;
         font-size: Theme.fs-md;
+        font-weight: active ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -57,15 +59,16 @@ component SegOption inherits Rectangle {
 component MiniInput inherits Rectangle {
     in property <string> placeholder;
     in-out property <string> value;
-    height: 30px;
+    height: 36px;
     horizontal-stretch: 1;
-    border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-radius: Theme.radius-md;
+    border-width: 1.5px;
     border-color: mi.has-focus ? Theme.accent : Theme.border-subtle;
     background: Theme.bg-root;
+    animate border-color { duration: 150ms; }
     mi := TextInput {
-        x: 8px;
-        width: parent.width - 16px;
+        x: 10px;
+        width: parent.width - 20px;
         height: parent.height;
         color: Theme.text-primary;
         font-family: Theme.ui-font-family;
@@ -75,7 +78,7 @@ component MiniInput inherits Rectangle {
         text <=> root.value;
     }
     if root.value == "" : Text {
-        x: 8px;
+        x: 10px;
         height: parent.height;
         text: root.placeholder;
         color: Theme.text-muted;

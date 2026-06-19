@@ -19,6 +19,10 @@ mod telnet;
 mod zmodem;
 
 fn main() -> anyhow::Result<()> {
+    // Install the `log` filter BEFORE tracing init: Slint's diagnostics (now
+    // routed via the `log` feature) flow here, where we drop the harmless
+    // ICU4X segmentation-model spam and forward everything else to stderr.
+    init_log_filter();
     init_tracing();
 
     // ── IME policy ───────────────────────────────────────────────────────────
@@ -67,4 +71,42 @@ fn init_tracing() {
         .with(stderr_layer)
         .with(file_layer)
         .init();
+}
+
+/// Install a `log` crate logger that suppresses the harmless ICU4X
+/// line-break fallback warning which otherwise floods the console whenever the
+/// terminal renders CJK text.
+///
+/// Slint 1.16 bundles ICU4X data that ships no `ja` segmentation dictionary
+/// model, so `icu_segmenter` logs "No segmentation model for language: ja" per
+/// shaped run and falls back to generic line-breaking rules — text still
+/// renders correctly, it's just noisy (slint-ui/slint#11604). Other `log`
+/// records (warn/error) are forwarded to stderr so real Slint/ICU4X issues stay
+/// visible. Must be called before Slint starts emitting diagnostics.
+fn init_log_filter() {
+    use log::{Level, Log, Metadata, Record};
+
+    struct FilteredLogger;
+
+    impl Log for FilteredLogger {
+        fn enabled(&self, metadata: &Metadata) -> bool {
+            metadata.level() <= Level::Warn
+        }
+
+        fn log(&self, record: &Record) {
+            // Drop the specific ICU4X segmentation-model fallback warning.
+            let args = record.args();
+            if args.to_string().contains("No segmentation model") {
+                return;
+            }
+            eprintln!("{} {}: {}", record.level(), record.target(), args);
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: FilteredLogger = FilteredLogger;
+    // Ignore the error if a logger was already installed elsewhere.
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
 }

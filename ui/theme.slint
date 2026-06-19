@@ -3,44 +3,44 @@
 // All colour values are reactive: change `dark` and every widget repaints
 // automatically via Slint's property-binding system.
 //
-// Dark palette  — high-contrast charcoal (original meatshell look).
-// Light palette — Apple macOS-inspired:
-//   • Backgrounds use #f5f5f7 (Apple page gray) instead of pure white to
-//     avoid eye-strain.
-//   • Primary text is #1d1d1f (Apple near-black) not #000000.
-//   • Accent is #0071e3 (Apple blue), consistent across both themes.
+// Material Design 3 inspired palette:
+//   • Dark surfaces use a clean, deep neutral (no muddy charcoal) so panels
+//     separate by elevation (lighter = higher), not by visible borders.
+//   • Borders are nearly transparent state layers — flat design relies on
+//     whitespace + background contrast, not hairlines.
+//   • Accent is a vivid Google-blue that reads on both schemes.
 
 export global Theme {
     // Set by Rust on startup (system detection) and on user toggle.
     in-out property <bool> dark: true;
 
     // --- Palette -----------------------------------------------------------
-    out property <brush> bg-root:      dark ? #1b1d23 : #f5f5f7;
-    out property <brush> bg-panel:     dark ? #23262d : #ffffff;
-    out property <brush> bg-panel-alt: dark ? #2a2d35 : #f2f2f7;
-    out property <brush> bg-elevated:  dark ? #30333c : #e8e8ed;
-    out property <brush> bg-hover:     dark ? #373a44 : #e0e0e6;
-    out property <brush> bg-active:    dark ? #3f4350 : #d8d8de;
+    out property <brush> bg-root:      dark ? #121316 : #f8f9fa;
+    out property <brush> bg-panel:     dark ? #1a1d23 : #ffffff;
+    out property <brush> bg-panel-alt: dark ? #232730 : #f1f3f4;
+    out property <brush> bg-elevated:  dark ? #2c313c : #e8eaed;
+    out property <brush> bg-hover:     dark ? #ffffff14 : #0000000a;
+    out property <brush> bg-active:    dark ? #ffffff24 : #00000014;
 
-    out property <brush> border-subtle: dark ? #3a3d46 : #e2e2e8;
-    out property <brush> border-strong: dark ? #4a4e59 : #c7c7cc;
+    out property <brush> border-subtle: dark ? #ffffff10 : #0000000d;
+    out property <brush> border-strong: dark ? #ffffff22 : #0000001f;
 
-    out property <brush> text-primary:   dark ? #e6e8ee : #1d1d1f;
-    out property <brush> text-secondary: dark ? #b4b9c4 : #6e6e73;
-    out property <brush> text-muted:     dark ? #9196a3 : #aeaeb2;
+    out property <brush> text-primary:   dark ? #e9eaee : #1f1f1f;
+    out property <brush> text-secondary: dark ? #bdc1c6 : #5f6368;
+    out property <brush> text-muted:     dark ? #9aa0a6 : #80868b;
 
-    out property <brush> accent:         dark ? #4a90e2 : #0071e3;
-    out property <brush> accent-hover:   dark ? #5aa0f2 : #0077ed;
-    out property <brush> accent-pressed: dark ? #3a80d2 : #006adb;
+    out property <brush> accent:         dark ? #8ab4f8 : #1a73e8;
+    out property <brush> accent-hover:   dark ? #aecbfa : #1765cc;
+    out property <brush> accent-pressed: dark ? #669df6 : #1557b0;
 
-    out property <brush> success: dark ? #4ec9b0 : #34c759;
-    out property <brush> warning: dark ? #e2a84a : #ff9f0a;
-    out property <brush> danger:  dark ? #e25c5c : #ff3b30;
+    out property <brush> success: dark ? #81c995 : #1e8e3e;
+    out property <brush> warning: dark ? #fdd663 : #f9ab00;
+    out property <brush> danger:  dark ? #f28b82 : #d93025;
 
     // Terminal uses its own background so it stays readable regardless of
     // what the shell / remote app outputs via ANSI colour codes.
-    out property <brush> term-bg: dark ? #0e0f13 : #fafafa;
-    out property <brush> term-fg: dark ? #d4d4d4 : #2d2d2f;
+    out property <brush> term-bg: dark ? #0d0e12 : #fafafa;
+    out property <brush> term-fg: dark ? #d4d4d4 : #202124;
 
     // --- Typography --------------------------------------------------------
     out property <length> fs-xs: 11px;
@@ -63,10 +63,11 @@ export global Theme {
     in-out property <string> term-font-family: "Meatshell Mono";
     in-out property <length> term-font-size: 13px;
 
-    // --- Geometry ----------------------------------------------------------
-    out property <length> radius-sm: 4px;
-    out property <length> radius-md: 6px;
-    out property <length> radius-lg: 10px;
+    // --- Geometry (Material Design 3) ----------------------------------------
+    out property <length> radius-sm: 10px;   // chips, small buttons, menu items
+    out property <length> radius-md: 14px;   // cards, inputs, dialogs
+    out property <length> radius-lg: 18px;   // large containers, sheets
+    out property <length> radius-xl: 28px;   // FAB-style, full pill buttons
 
     out property <length> gap-xs: 4px;
     out property <length> gap-sm: 8px;

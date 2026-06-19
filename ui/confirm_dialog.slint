@@ -1,18 +1,21 @@
 import { Theme } from "theme.slint";
 import { GhostButton } from "widgets.slint";
 
-// A destructive (red) action button, matching PrimaryButton's shape.
+// A destructive (red) action button, matching PrimaryButton's pill shape.
 component DangerButton inherits Rectangle {
     in property <string> text;
     callback clicked();
-    height: 30px;
-    min-width: 80px;
-    border-radius: Theme.radius-sm;
+    height: 36px;
+    min-width: 88px;
+    border-radius: Theme.radius-xl;
     background: touch.pressed ? #c44a4a : (touch.has-hover ? #ec6a6a : Theme.danger);
-    animate background { duration: 120ms; }
+    animate background { duration: 150ms; easing: ease-out; }
+    drop-shadow-blur: touch.has-hover ? 6px : 2px;
+    drop-shadow-color: Theme.danger.with-alpha(0.35);
+    drop-shadow-offset-y: 1px;
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
         alignment: center;
         Text {
             text: root.text;
