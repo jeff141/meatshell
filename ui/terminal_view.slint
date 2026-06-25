@@ -96,6 +96,8 @@ export component TerminalView inherits Rectangle {
     in property <bool>   is-alt-screen;
     in property <[TermMatch]> find-matches; // search-highlight rectangles
     in property <[TermMatch]> selection;    // drag-selection highlight rectangles
+    in property <bool> is-mac;
+    callback select-word(int, int);
 
     in property <string>  sftp-path: "/";
     in property <[SftpEntry]> sftp-entries;
@@ -479,6 +481,12 @@ export component TerminalView inherits Rectangle {
                                 }
                                 accept
                             }
+                            double-clicked => {
+                                root.select-word(
+                                    floor(self.mouse-y / root.cell-h),
+                                    floor(self.mouse-x / root.cell-w)
+                                );
+                            }
                         }
 
                         // Drag-selection highlights (under the text, blue tint).
@@ -626,8 +634,21 @@ export component TerminalView inherits Rectangle {
                 }
 
                 key-pressed(event) => {
+                    // ── macOS: Physical Cmd+C (control+c) is Copy ───────────────────
+                    if (root.is-mac && event.modifiers.control
+                            && (event.text == "c" || event.text == "C"
+                                || event.text == "\u{0003}")) {
+                        root.copy-terminal-text();
+                        accept
+                    // ── macOS: Physical Cmd+V (control+v) is Paste ──────────────────
+                    } else if (root.is-mac && event.modifiers.control
+                            && (event.text == "v" || event.text == "V"
+                                || event.text == "\u{0016}")) {
+                        root.paste-from-clipboard();
+                        ime-input.focus();
+                        accept
                     // ── Ctrl+F: open the find bar (mirrors right-click → Find) ──
-                    if (event.modifiers.control && !event.modifiers.shift
+                    } else if (event.modifiers.control && !event.modifiers.shift
                             && (event.text == "f" || event.text == "F"
                                 || event.text == "\u{0006}")) {
                         root.find-active = true;
@@ -640,21 +661,17 @@ export component TerminalView inherits Rectangle {
                                 || event.text == "\u{0012}")) {
                         root.history-open = true;
                         accept
-                    // ── Ctrl+Shift+C: copy terminal buffer ───────────────────
-                    } else if (event.modifiers.control && event.modifiers.shift
+                    // ── Non-macOS: Ctrl+Shift+C: copy terminal buffer ───────
+                    } else if (!root.is-mac && event.modifiers.control && event.modifiers.shift
                             && (event.text == "c" || event.text == "C"
                                 || event.text == "\u{0003}")) {
                         root.copy-terminal-text();
                         accept
-                    // ── Ctrl+V or Ctrl+Shift+V: paste from clipboard ─────────
-                    // We accept Ctrl+V (with or without Shift) so the familiar
-                    // Windows paste shortcut works in addition to Ctrl+Shift+V.
-                    } else if (event.modifiers.control
+                    // ── Non-macOS: Ctrl+V or Ctrl+Shift+V: paste from clipboard ──
+                    } else if (!root.is-mac && event.modifiers.control
                             && (event.text == "v" || event.text == "V"
                                 || event.text == "\u{0016}")) {
                         root.paste-from-clipboard();
-                        // Clipboard access on Windows can deliver WM_KILLFOCUS.
-                        // Restore focus explicitly so the cursor keeps blinking.
                         ime-input.focus();
                         accept
                     // ── All other keys (printable, Ctrl+X, arrows, …) ────────
@@ -662,7 +679,8 @@ export component TerminalView inherits Rectangle {
                     // inserting the char into TextInput, so `edited` never fires
                     // for regular keystrokes — the character would be lost.
                     } else {
-                        root.send-key(event.text, event.modifiers.control,
+                        root.send-key(event.text,
+                                      root.is-mac ? event.modifiers.meta : event.modifiers.control,
                                       event.modifiers.alt, event.modifiers.shift);
                         accept
                     }
