@@ -634,50 +634,48 @@ export component TerminalView inherits Rectangle {
                 }
 
                 key-pressed(event) => {
-                    // ── macOS: Physical Cmd+C (control+c) is Copy ───────────────────
-                    if (root.is-mac && event.modifiers.control
-                            && (event.text == "c" || event.text == "C"
-                                || event.text == "\u{0003}")) {
-                        root.copy-terminal-text();
-                        accept
-                    // ── macOS: Physical Cmd+V (control+v) is Paste ──────────────────
-                    } else if (root.is-mac && event.modifiers.control
-                            && (event.text == "v" || event.text == "V"
-                                || event.text == "\u{0016}")) {
-                        root.paste-from-clipboard();
-                        ime-input.focus();
-                        accept
-                    // ── Ctrl+F: open the find bar (mirrors right-click → Find) ──
-                    } else if (event.modifiers.control && !event.modifiers.shift
+                    // App shortcuts use the Cmd (⌘) modifier on macOS and Ctrl on
+                    // Windows/Linux, so on macOS the *physical Ctrl* key stays free
+                    // to reach the shell (^C/^X… work in nano/vim) (#158). The app
+                    // accelerator below is `meta` on macOS, `control` elsewhere.
+                    // ── Find: ⌘F / Ctrl+F (mirrors right-click → Find) ──
+                    if ((Theme.is-mac ? event.modifiers.meta : event.modifiers.control)
+                            && !event.modifiers.shift
                             && (event.text == "f" || event.text == "F"
                                 || event.text == "\u{0006}")) {
                         root.find-active = true;
                         accept
-                    // ── Ctrl+Shift+R: jump from the terminal to the command box's
-                    // searchable history (keyboard recall) (#140). Ctrl+Shift+R
-                    // (not Ctrl+R) so the shell keeps its own reverse-search.
-                    } else if (event.modifiers.control && event.modifiers.shift
+                    // ── Jump to command-history search: ⌘⇧R / Ctrl+Shift+R (#140).
+                    // Shifted so the shell keeps its own Ctrl+R reverse-search.
+                    } else if ((Theme.is-mac ? event.modifiers.meta : event.modifiers.control)
+                            && event.modifiers.shift
                             && (event.text == "r" || event.text == "R"
                                 || event.text == "\u{0012}")) {
                         root.history-open = true;
                         accept
-                    // ── Non-macOS: Ctrl+Shift+C: copy terminal buffer ───────
-                    } else if (!root.is-mac && event.modifiers.control && event.modifiers.shift
+                    // ── Copy: ⌘C (macOS) / Ctrl+Shift+C ──
+                    } else if ((Theme.is-mac
+                                ? (event.modifiers.meta && !event.modifiers.shift)
+                                : (event.modifiers.control && event.modifiers.shift))
                             && (event.text == "c" || event.text == "C"
                                 || event.text == "\u{0003}")) {
                         root.copy-terminal-text();
                         accept
-                    // ── Non-macOS: Ctrl+V or Ctrl+Shift+V: paste from clipboard ──
-                    } else if (!root.is-mac && event.modifiers.control
+                    // ── Paste: ⌘V / Ctrl+V (Ctrl+Shift+V also accepted) ──
+                    } else if ((Theme.is-mac ? event.modifiers.meta : event.modifiers.control)
                             && (event.text == "v" || event.text == "V"
                                 || event.text == "\u{0016}")) {
                         root.paste-from-clipboard();
                         ime-input.focus();
                         accept
-                    // ── All other keys (printable, Ctrl+X, arrows, …) ────────
-                    // Return `accept` for everything: `reject` bubbles without
-                    // inserting the char into TextInput, so `edited` never fires
-                    // for regular keystrokes — the character would be lost.
+                    // ── macOS: swallow any other ⌘ combo so it isn't typed into
+                    // the shell as a literal character. ──
+                    } else if (Theme.is-mac && event.modifiers.meta) {
+                        accept
+                    // ── All other keys (printable, Ctrl+X, arrows, …) → the shell.
+                    // `control` here is the *physical* Ctrl key (Cmd is meta), so
+                    // ^X/^C reach the PTY on every platform (#158). Return `accept`
+                    // for everything: `reject` would bubble and drop the char.
                     } else {
                         root.send-key(event.text,
                                       root.is-mac ? event.modifiers.meta : event.modifiers.control,
@@ -866,10 +864,13 @@ export component TerminalView inherits Rectangle {
                             root.history-cursor = -1;
                         }
                         key-pressed(e) => {
-                            // Ctrl+R opens the searchable history dropdown and
-                            // focuses its search box — full keyboard history
-                            // recall (#140). Esc closes it / returns to terminal.
-                            if (e.modifiers.control && (e.text == "r" || e.text == "R" || e.text == "\u{0012}")) {
+                            // ⌘R / Ctrl+R opens the searchable history dropdown and
+                            // focuses its search box — full keyboard history recall
+                            // (#140). Esc closes it / returns to terminal. (The
+                            // Ctrl+A/E/K/U line-editing below stays on Ctrl — those
+                            // are the standard readline bindings on macOS too.)
+                            if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
+                                    && (e.text == "r" || e.text == "R" || e.text == "\u{0012}")) {
                                 root.history-open = true;
                                 accept
                             } else if (e.text == Key.Escape) {

@@ -566,7 +566,12 @@ async fn run_session(
     )));
 
     let config = Arc::new(client::Config {
-        inactivity_timeout: Some(std::time::Duration::from_secs(60 * 10)),
+        // Keep idle connections alive (#160). The terminal usually has the
+        // resource-monitor channel streaming every 2 s, but with shell
+        // integration disabled (#140) it can go idle and be dropped by
+        // NAT / firewall / server timeouts. A 30 s keepalive prevents that;
+        // keepalive_max (default 3) closes a genuinely dead connection.
+        keepalive_interval: Some(std::time::Duration::from_secs(30)),
         ..<_>::default()
     });
 

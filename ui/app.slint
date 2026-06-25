@@ -332,6 +332,8 @@ export component AppWindow inherits Window {
     // Window focused & visible — Rust drives it from winit events; gates the
     // cursor blink so an idle background window stops repainting (#127).
     in-out property <bool> window-focused <=> Theme.window-focused;
+    // macOS flag — Rust sets it so shortcuts switch to Cmd (⌘) there (#158).
+    in-out property <bool> is-mac <=> Theme.is-mac;
     // Wallpaper / immersive theming — Rust drives these from the wallpaper module.
     in-out property <image> wallpaper-img <=> Theme.wallpaper;
     in-out property <bool> wallpaper-active <=> Theme.wallpaper-active;
@@ -795,7 +797,10 @@ export component AppWindow inherits Window {
                 // a floating button at the docked edge below (#dock).
                 // When docked left/top + collapsed, leave room on the far left so
                 // the expand button sits just left of the first tab (not over it).
-                if (root.sidebar-dock == "left" || root.sidebar-dock == "top") && root.sidebar-collapsed : Rectangle { width: 30px; }
+                // Frosted backing (matches the expand button) so the reserved gap
+                // doesn't show the raw wallpaper as a dark block behind the button
+                // in immersive mode (#dock).
+                if (root.sidebar-dock == "left" || root.sidebar-dock == "top") && root.sidebar-collapsed : Rectangle { width: 30px; background: Theme.bg-elevated; }
                 TabBar {
                     horizontal-stretch: 1;
                     // Reserve room for the top-right toolbar icons that sit over
@@ -1166,7 +1171,7 @@ export component AppWindow inherits Window {
             // Ctrl+S saves, Esc closes. These bubble up from the focused
             // TextInput because it doesn't consume them.
             key-pressed(e) => {
-                if (e.text == "s" && e.modifiers.control) {
+                if (e.text == "s" && (Theme.is-mac ? e.modifiers.meta : e.modifiers.control)) {
                     root.save-file();
                     return accept;
                 }
@@ -1362,8 +1367,10 @@ export component AppWindow inherits Window {
     // Always present; toggled via `visible` (avoids destroying interactive
     // elements mid-event, which crashes when created/removed at the Window root).
     Rectangle {
-        x: parent.width - 364px;
-        y: root.custom-titlebar ? 78px : 40px;
+        // Follow the download button (shifts with the toolbar when the resource
+        // panel docks right/top) (#dock).
+        x: parent.width - 364px - root.toolbar-x-off;
+        y: (root.custom-titlebar ? 78px : 40px) + root.toolbar-y-off;
         width: 350px;
         height: 400px;
         visible: root.download-open;
@@ -1572,8 +1579,11 @@ export component AppWindow inherits Window {
         clicked => { root.settings-open = false; }
     }
     Rectangle {
-        x: parent.width - 196px;
-        y: root.custom-titlebar ? 78px : 40px;
+        // Follow the gear button: it shifts by toolbar-x/y-off when the resource
+        // panel docks right/top, so the menu must shift the same amount or it ends
+        // up floating over the resource panel (#dock).
+        x: parent.width - 196px - root.toolbar-x-off;
+        y: (root.custom-titlebar ? 78px : 40px) + root.toolbar-y-off;
         width: 198px;
         height: 220px;
         visible: root.settings-open;
@@ -2466,10 +2476,10 @@ export component AppWindow inherits Window {
 
                 Text { text: root.lang-en ? "Terminal" : "终端";
                        color: Theme.text-muted; font-size: Theme.fs-xs; }
-                ShortcutRow { keys: "Ctrl+Shift+C"; desc: root.lang-en ? "Copy selection" : "复制选中内容"; }
-                ShortcutRow { keys: "Ctrl+V"; desc: root.lang-en ? "Paste" : "粘贴"; }
-                ShortcutRow { keys: "Ctrl+F"; desc: root.lang-en ? "Find in terminal" : "查找"; }
-                ShortcutRow { keys: "Ctrl+Shift+R"; desc: root.lang-en ? "Jump to command history search" : "跳到命令历史搜索"; }
+                ShortcutRow { keys: root.is-mac ? "⌘C" : "Ctrl+Shift+C"; desc: root.lang-en ? "Copy selection" : "复制选中内容"; }
+                ShortcutRow { keys: root.is-mac ? "⌘V" : "Ctrl+V"; desc: root.lang-en ? "Paste" : "粘贴"; }
+                ShortcutRow { keys: root.is-mac ? "⌘F" : "Ctrl+F"; desc: root.lang-en ? "Find in terminal" : "查找"; }
+                ShortcutRow { keys: root.is-mac ? "⌘⇧R" : "Ctrl+Shift+R"; desc: root.lang-en ? "Jump to command history search" : "跳到命令历史搜索"; }
                 ShortcutRow { keys: root.lang-en ? "Drag" : "鼠标拖动"; desc: root.lang-en ? "Select text" : "选择文本"; }
                 ShortcutRow { keys: root.lang-en ? "Wheel / Scrollbar" : "滚轮 / 滚动条"; desc: root.lang-en ? "Scroll history" : "滚动历史"; }
 
@@ -2478,12 +2488,12 @@ export component AppWindow inherits Window {
                        color: Theme.text-muted; font-size: Theme.fs-xs; }
                 ShortcutRow { keys: "Enter"; desc: root.lang-en ? "Send command" : "发送命令"; }
                 ShortcutRow { keys: "↑ / ↓"; desc: root.lang-en ? "Previous / next in history" : "上一条 / 下一条历史"; }
-                ShortcutRow { keys: "Ctrl+R"; desc: root.lang-en ? "Search history (↑↓ select, Enter run, Esc close)" : "搜索命令历史(↑↓ 选择,回车执行,Esc 关闭)"; }
+                ShortcutRow { keys: root.is-mac ? "⌘R" : "Ctrl+R"; desc: root.lang-en ? "Search history (↑↓ select, Enter run, Esc close)" : "搜索命令历史(↑↓ 选择,回车执行,Esc 关闭)"; }
                 ShortcutRow { keys: "Esc"; desc: root.lang-en ? "Close history / focus terminal" : "关闭历史 / 聚焦终端"; }
-                ShortcutRow { keys: "Ctrl+A"; desc: root.lang-en ? "Move to start of line" : "移到行首"; }
-                ShortcutRow { keys: "Ctrl+E"; desc: root.lang-en ? "Move to end of line" : "移到行尾"; }
-                ShortcutRow { keys: "Ctrl+K"; desc: root.lang-en ? "Delete to end of line" : "删除到行尾"; }
-                ShortcutRow { keys: "Ctrl+U"; desc: root.lang-en ? "Delete to start of line" : "删除到行首"; }
+                ShortcutRow { keys: root.is-mac ? "⌃A" : "Ctrl+A"; desc: root.lang-en ? "Move to start of line" : "移到行首"; }
+                ShortcutRow { keys: root.is-mac ? "⌃E" : "Ctrl+E"; desc: root.lang-en ? "Move to end of line" : "移到行尾"; }
+                ShortcutRow { keys: root.is-mac ? "⌃K" : "Ctrl+K"; desc: root.lang-en ? "Delete to end of line" : "删除到行尾"; }
+                ShortcutRow { keys: root.is-mac ? "⌃U" : "Ctrl+U"; desc: root.lang-en ? "Delete to start of line" : "删除到行首"; }
                         Rectangle { height: 2px; }
                     }
                 }

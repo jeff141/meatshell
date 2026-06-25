@@ -3391,7 +3391,7 @@ checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "meatshell"
-version = "0.4.17"
+version = "0.4.18"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3407,6 +3407,7 @@ dependencies = [
  "icu_provider",
  "image",
  "rand 0.8.6",
+ "raw-window-handle",
  "rfd",
  "russh",
  "russh-keys",

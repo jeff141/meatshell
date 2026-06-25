@@ -3,6 +3,74 @@
 All notable changes are documented here. 本文件记录所有重要变更。
 中英对照（English first, 中文在后）.
 
+## [0.4.18] - 2026-06-26
+
+### Added / 新增
+
+- **Windows 11 圆角窗口 + 投影 (#162 / #166)。** 自绘标题栏的无边框窗口此前是直角、无阴影,
+  不符合 Win11 风格。现用 DWM 给它补上系统**圆角**(DWMWA_WINDOW_CORNER_PREFERENCE)和**投影**
+  (DwmExtendFrameIntoClientArea);Win10 自动忽略圆角属性,其他平台无影响。
+  **Native rounded corners + drop shadow on Windows 11 (#162 / #166).** The frameless window (custom
+  title bar) had square corners and no shadow. DWM now gives it the system rounded corners and
+  shadow; ignored on Windows 10, a no-op elsewhere.
+
+- **macOS 上 app 快捷键改用 Cmd(⌘),释放 Ctrl 给终端 (#158)。** Mac 有 Ctrl 和 Cmd 两个键,之前
+  app 快捷键全占了 Ctrl,导致 nano 里 ^X 等控制键发不到 shell。现按 macOS 习惯:查找 / 复制 /
+  粘贴 / 历史 / 保存用 ⌘,物理 Ctrl 原样直达 shell;命令框的 Ctrl+A/E/K/U 行编辑保留 Ctrl;设置 →
+  快捷键也显示 ⌘ / ⌃。Windows/Linux 不变。
+  **macOS app shortcuts now use Cmd (⌘), freeing Ctrl for the terminal (#158).** macOS has both Ctrl
+  and Cmd; app shortcuts all used Ctrl, so terminal control keys (^X in nano…) couldn't reach the
+  shell. Now find / copy / paste / history / save use ⌘ and the physical Ctrl passes straight through;
+  the command box's Ctrl+A/E/K/U line editing stays on Ctrl; Settings → Shortcuts shows ⌘ / ⌃.
+  Windows/Linux unchanged.
+
+### Fixed / 修复
+
+- **SFTP 闲置一段时间后失效 (#160)。** SFTP 连接没有 keepalive,空闲时被 NAT / 防火墙 / 服务器空闲
+  超时掐断,之后点目录"文件夹读取失败"、增删改全废。两条连接(终端 + SFTP)现都加 30s keepalive
+  保活,真死了由 keepalive_max 关闭。
+  **SFTP stopped working after sitting idle (#160).** The SFTP connection had no keepalive, so it was
+  silently dropped by NAT / firewall / server idle timeouts; afterwards every operation failed. Both
+  connections now send a 30 s keepalive, with keepalive_max still closing a genuinely dead one.
+
+- **git clone / curl 输出在极窄列(~10)乱折行 (#163)。** 布局回流时 root.width 瞬间读成 ≈0,终端
+  列数塌到下限 10 并立刻 resize 远程 PTY,正在跑的输出就按 10 列乱折。现给 PTY resize 加 150ms
+  防抖,只应用静置后的尺寸,一闪而过的坏值不再发到服务器。
+  **git clone / curl output wrapped at ~10 columns (#163).** A layout reflow momentarily reported a
+  near-zero width, collapsing the terminal column count to its floor of 10 and resizing the remote
+  PTY, which garbled in-flight output. PTY resizes are now debounced (150 ms) so only the settled
+  size reaches the server.
+
+- **设置 / 下载下拉菜单在资源面板停靠时错位。** 资源面板停右 / 上时齿轮 / 下载按钮会随工具栏位移,
+  但两个下拉用的是固定坐标,会飘到资源面板上。现让下拉跟随按钮位移。
+  **Settings / download dropdowns floated over the docked resource panel.** The gear / download
+  buttons shift with the toolbar when the resource panel docks right / top, but the two dropdowns
+  used fixed coordinates. They now follow their buttons.
+
+- **浅色模式次要 / 弱化文字太浅。** 沉浸壁纸 + 浅色下,副标题、磁盘 / 路径标签、说明文字等灰得发飘、
+  对比度差。浅色模式的 text-secondary / text-muted 已加深(深色模式不变)。
+  **Faint secondary / muted text in light mode.** With the immersive wallpaper + light mode,
+  subtitles, disk / path labels and hints were too pale on the bright background. Light-mode
+  secondary / muted text is darkened (dark mode unchanged).
+
+- **沉浸壁纸下,收起的资源面板展开按钮旁露出"黑块"。** 给展开按钮预留的 30px 空位没有背景,露出
+  底下深色壁纸,浅色主题里就是一小块黑。现补上与按钮一致的磨砂背景。
+  **A "black block" next to the collapsed resource-panel expand button in immersive mode.** The 30px
+  gap reserved for the expand button had no background and showed the raw (dark) wallpaper; it now
+  uses the same frosted background as the button.
+
+### Security / 安全
+
+- **记录 RUSTSEC-2026-0154 不可达,暂不升级 russh (#151)。** 该 DoS 在 russh 的 ssh-agent 帧解析,
+  meatshell 完全不用 ssh-agent,漏洞代码路径在本二进制里不可达、不可利用;而唯一修复版
+  (russh ≥ 0.60.3)会引入一堆**预发布**加密库(ed25519-dalek pre、aes-gcm rc…),在 SSH 客户端里
+  用未审计的 rc 密码库风险更大。故 russh 暂留 0.49,等其依赖脱离 -rc 再迁移;新增 audit.toml 附完整理由。
+  **Documented RUSTSEC-2026-0154 as unreachable; holding russh at 0.49 (#151).** The DoS is in russh's
+  ssh-agent frame parsing, which meatshell never uses — the path is dead code here. The only patched
+  russh (>= 0.60.3) drags in a stack of pre-release crypto crates, a worse trade than this unreachable
+  DoS, so russh stays at 0.49 until its deps leave the -rc channel. Adds audit.toml with the full
+  rationale.
+
 ## [0.4.17] - 2026-06-24
 
 ### Added / 新增
