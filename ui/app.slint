@@ -233,6 +233,7 @@ export component AppWindow inherits Window {
     // Default true so the window is frameless from creation (no native-bar flash);
     // Rust sets it false on macOS, which keeps native decorations.
     in-out property <bool> custom-titlebar: true;
+    in property <bool> is-mac: false;
     in-out property <bool> window-maximized: false;
     callback win-minimize();
     callback win-maximize-toggle();
@@ -592,6 +593,7 @@ export component AppWindow inherits Window {
     callback term-select-update(string /* tab-id */, int /* row */, int /* col */);
     callback term-select-end(string /* tab-id */);
     callback term-select-autoscroll(string /* tab-id */, int /* dir */);
+    callback term-select-word(string /* tab-id */, int /* row */, int /* col */);
 
     // Immersive wallpaper layer — painted behind everything, filling the window.
     // Panels/terminal frost over it (see Theme.frost). Only present when active.
@@ -867,6 +869,7 @@ export component AppWindow inherits Window {
                     is-alt-screen: term.is-alt-screen;
                     find-matches: term.find-matches;
                     selection: term.selection;
+                    is-mac: root.is-mac;
                     sftp-panel-height <=> root.sftp-panel-height;
                     sftp-panel-width <=> root.sftp-panel-width;
                     sftp-dock <=> root.sftp-dock;
@@ -965,6 +968,7 @@ export component AppWindow inherits Window {
                     select-update(r, c) => { root.term-select-update(term.id, r, c); }
                     select-end() => { root.term-select-end(term.id); }
                     select-autoscroll(dir) => { root.term-select-autoscroll(term.id, dir); }
+                    select-word(r, c) => { root.term-select-word(term.id, r, c); }
                 }
             }
             }

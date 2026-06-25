@@ -96,6 +96,8 @@ export component TerminalView inherits Rectangle {
     in property <bool>   is-alt-screen;
     in property <[TermMatch]> find-matches; // search-highlight rectangles
     in property <[TermMatch]> selection;    // drag-selection highlight rectangles
+    in property <bool> is-mac;
+    callback select-word(int, int);
 
     in property <string>  sftp-path: "/";
     in property <[SftpEntry]> sftp-entries;
@@ -479,6 +481,12 @@ export component TerminalView inherits Rectangle {
                                 }
                                 accept
                             }
+                            double-clicked => {
+                                root.select-word(
+                                    floor(self.mouse-y / root.cell-h),
+                                    floor(self.mouse-x / root.cell-w)
+                                );
+                            }
                         }
 
                         // Drag-selection highlights (under the text, blue tint).
@@ -658,8 +666,6 @@ export component TerminalView inherits Rectangle {
                             && (event.text == "v" || event.text == "V"
                                 || event.text == "\u{0016}")) {
                         root.paste-from-clipboard();
-                        // Clipboard access on Windows can deliver WM_KILLFOCUS.
-                        // Restore focus explicitly so the cursor keeps blinking.
                         ime-input.focus();
                         accept
                     // ── macOS: swallow any other ⌘ combo so it isn't typed into
@@ -671,7 +677,8 @@ export component TerminalView inherits Rectangle {
                     // ^X/^C reach the PTY on every platform (#158). Return `accept`
                     // for everything: `reject` would bubble and drop the char.
                     } else {
-                        root.send-key(event.text, event.modifiers.control,
+                        root.send-key(event.text,
+                                      root.is-mac ? event.modifiers.meta : event.modifiers.control,
                                       event.modifiers.alt, event.modifiers.shift);
                         accept
                     }

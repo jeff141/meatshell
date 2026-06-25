@@ -261,6 +261,7 @@ pub fn run() -> Result<()> {
     // its native decorations, so turn the custom bar off there.
     #[cfg(target_os = "macos")]
     window.set_custom_titlebar(false);
+    window.set_is_mac(cfg!(target_os = "macos"));
 
     // --- Detachable process monitor window (#23) -----------------------------
     // The process table is its own top-level OS window so it can be dragged
@@ -5222,6 +5223,27 @@ fn wire_key_input(
             }
         });
     }
+    {
+        let bufs_sel = bufs.clone();
+        let weak = window.as_weak();
+        window.on_term_select_word(move |tab_id: SharedString, row: i32, col: i32| {
+            let tid = tab_id.to_string();
+            let text = {
+                let mut map = bufs_sel.lock().unwrap();
+                let Some(buf) = map.get_mut(&tid) else { return };
+                let (rows, cols) = buf.parser.screen().size();
+                let r = row.clamp(0, rows.saturating_sub(1) as i32) as u16;
+                let c = col.clamp(0, cols.saturating_sub(1) as i32) as u16;
+                buf.select_word_at(r, c)
+            };
+            if let Some(t) = text {
+                std::thread::spawn(move || clipboard_set_text(t));
+            }
+            if let Some(win) = weak.upgrade() {
+                rebuild_tab_display(&win, &bufs_sel, &tid);
+            }
+        });
+    }
     // Auto-scroll while drag-selecting past the visible top/bottom edge.  The
     // anchor is in absolute coordinates so it stays pinned no matter how far the
     // view moves; we only advance the scrollback view and re-point the focus at
@@ -5989,6 +6011,77 @@ impl TermBuffer {
             }
         }
         out
+    }
+
+    fn select_word_at(&mut self, vis_row: u16, vis_col: u16) -> Option<String> {
+        let abs = self.vis_to_abs(vis_row);
+        let s = self.parser.screen();
+        let (rows, cols) = s.size();
+        let line_str = if abs < self.history.len() {
+            self.history[abs].0.clone()
+        } else {
+            let live_row_idx = abs - self.history.len();
+            if live_row_idx < rows as usize {
+                build_row(s, live_row_idx as u16, cols).0
+            } else {
+                return None;
+            }
+        };
+
+        let chars: Vec<char> = line_str.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+        let prefix = cell_prefix(&chars);
+        let char_idx = char_at_cell_start(&prefix, vis_col as usize);
+        if char_idx >= chars.len() {
+            return None;
+        }
+
+        let is_word_char = |c: char| {
+            c.is_alphanumeric()
+                || c == '_'
+                || c == '-'
+                || c == '.'
+                || c == '/'
+                || c == '\\'
+                || c == '~'
+                || c == '@'
+                || c == ':'
+                || c == '+'
+                || c == '$'
+                || c == '%'
+        };
+
+        if !is_word_char(chars[char_idx]) {
+            return None;
+        }
+
+        // Expand left
+        let mut start_idx = char_idx;
+        while start_idx > 0 && is_word_char(chars[start_idx - 1]) {
+            start_idx -= 1;
+        }
+
+        // Expand right
+        let mut end_idx = char_idx;
+        while end_idx + 1 < chars.len() && is_word_char(chars[end_idx + 1]) {
+            end_idx += 1;
+        }
+
+        // Map back to columns
+        let c0 = prefix[start_idx];
+        let c1 = prefix[end_idx + 1].saturating_sub(1);
+
+        self.sel_anchor = Some((abs, c0 as u16));
+        self.sel_focus = Some((abs, c1 as u16));
+
+        let extracted = self.extract_selection_text();
+        if extracted.is_empty() {
+            None
+        } else {
+            Some(extracted)
+        }
     }
 
     /// Feed bytes to vt100 and capture scrolled-off lines into history.
