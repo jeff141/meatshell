@@ -880,6 +880,7 @@ export component AppWindow inherits Window {
             width: root.sidebar-horizontal ? parent.sb-w : parent.width;
             height: root.sidebar-horizontal ? parent.height : parent.sb-h;
             clip: true;
+            visible: !root.sidebar-collapsed;
             // Docked top/bottom → lay the resource widgets out in a row.
             lay-horizontal: !root.sidebar-horizontal;
             dock-edge: root.sidebar-dock;
