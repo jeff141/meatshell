@@ -854,7 +854,7 @@ export component AppWindow inherits Window {
                         root.welcome-sidebar-width = clamp(
                             self.absolute-position.x + self.mouse-x
                                 - dock-area.absolute-position.x - dock-area.strip-w,
-                            160px, 480px);
+                            200px, 480px);
                     }
                 }
             }
@@ -886,6 +886,7 @@ export component AppWindow inherits Window {
             width: root.sidebar-horizontal ? parent.sb-w : parent.width;
             height: root.sidebar-horizontal ? parent.height : parent.sb-h;
             clip: true;
+            visible: !root.sidebar-collapsed;
             // Docked top/bottom → lay the resource widgets out in a row.
             lay-horizontal: !root.sidebar-horizontal;
             dock-edge: root.sidebar-dock;

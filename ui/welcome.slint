@@ -265,7 +265,8 @@ export component Welcome inherits Rectangle {
                 padding: 16px;
                 spacing: 12px;
 
-                HorizontalLayout {
+                // Compact/sidebar mode: two rows — title+collapse, then button+hint.
+                if root.compact : HorizontalLayout {
                     spacing: 8px;
                     Text {
                         text: @tr("Quick connect");
@@ -275,14 +276,36 @@ export component Welcome inherits Rectangle {
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
-                    // Collapse the sidebar into the edge icon strip (compact only).
-                    if root.compact : IconButton {
-                        glyph: "‹";   // collapse to the edge strip
+                    IconButton {
+                        glyph: "‹";
                         size: 24px;
                         clicked => { root.collapse(); }
                     }
-                    // Result of the last "Import ~/.ssh/config" (triggered from
-                    // the settings menu), e.g. "imported 3".
+                }
+                if root.compact : HorizontalLayout {
+                    spacing: 8px;
+                    PrimaryButton {
+                        text: @tr("+ New session");
+                        clicked => { root.new-session(); }
+                    }
+                    Text {
+                        text: root.import-hint;
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                    }
+                }
+                // Tab mode: single row — button in top-right corner.
+                if !root.compact : HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Quick connect");
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-lg;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                     Text {
                         text: root.import-hint;
                         color: Theme.text-muted;
