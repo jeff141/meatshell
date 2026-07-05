@@ -698,15 +698,25 @@ where
     let (mut jhandle, mut no_nested) = Box::pin(connect_ssh(jump, None, config.clone(), events))
         .await
         .with_context(|| format!("connect jump host {}:{} failed", jump.host, jump.port))?;
-    match authenticate_session(&mut jhandle, &mut no_nested, jump, None, config.clone(), events)
-        .await?
+    match authenticate_session(
+        &mut jhandle,
+        &mut no_nested,
+        jump,
+        None,
+        config.clone(),
+        events,
+    )
+    .await?
     {
         AuthResult::Success => {}
         AuthResult::Cancelled => {
             return Err(anyhow!(t("跳板机登录已取消", "jump host login cancelled")))
         }
         AuthResult::Failed => {
-            return Err(anyhow!(t("跳板机认证失败", "jump host authentication failed")))
+            return Err(anyhow!(t(
+                "跳板机认证失败",
+                "jump host authentication failed"
+            )))
         }
     }
     let channel = jhandle
@@ -825,7 +835,11 @@ async fn run_session(
             return Ok(());
         }
         AuthResult::Failed => {
-            tracing::warn!("ssh authentication failed for {}@{}", session.user, session.host);
+            tracing::warn!(
+                "ssh authentication failed for {}@{}",
+                session.user,
+                session.host
+            );
             let _ = events.send(SessionEvent::Closed(
                 t("认证失败", "authentication failed").into(),
             ));

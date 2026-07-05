@@ -2045,6 +2045,33 @@ fn session_groups_model(store: &ConfigStore) -> ModelRc<SharedString> {
     )))
 }
 
+fn string_model(values: Vec<String>) -> ModelRc<SharedString> {
+    ModelRc::from(Rc::new(VecModel::from(
+        values
+            .into_iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    )))
+}
+
+fn ssh_config_models(
+    hosts: &[crate::ssh_config::ImportedHost],
+) -> (
+    ModelRc<SharedString>,
+    ModelRc<SharedString>,
+    ModelRc<SharedString>,
+    ModelRc<SharedString>,
+    ModelRc<SharedString>,
+) {
+    (
+        string_model(hosts.iter().map(|h| h.alias.clone()).collect()),
+        string_model(hosts.iter().map(|h| h.hostname.clone()).collect()),
+        string_model(hosts.iter().map(|h| h.port.to_string()).collect()),
+        string_model(hosts.iter().map(|h| h.user.clone()).collect()),
+        string_model(hosts.iter().map(|h| h.identity_file.clone()).collect()),
+    )
+}
+
 /// Build the jump-host picker's parallel label/id lists for the session dialog
 /// (#211). Index 0 is always the "no jump host" entry (empty id); the rest are
 /// the saved SSH sessions except `exclude_id` (a session can't jump through
@@ -2211,6 +2238,19 @@ fn wire_session_callbacks(
             ef_new.borrow_mut().clear();
             w.set_session_groups(session_groups_model(&store_ng.borrow()));
             w.set_dialog_forwards(forward_model(&[]));
+            let ssh_config_hosts = crate::ssh_config::parse_default();
+            let (
+                ssh_config_aliases,
+                ssh_config_hostnames,
+                ssh_config_ports,
+                ssh_config_users,
+                ssh_config_key_paths,
+            ) = ssh_config_models(&ssh_config_hosts);
+            w.set_dialog_ssh_config_aliases(ssh_config_aliases);
+            w.set_dialog_ssh_config_hostnames(ssh_config_hostnames);
+            w.set_dialog_ssh_config_ports(ssh_config_ports);
+            w.set_dialog_ssh_config_users(ssh_config_users);
+            w.set_dialog_ssh_config_key_paths(ssh_config_key_paths);
             let empty = Session::new_empty();
             let (jump_labels, jump_ids, jump_idx) =
                 jump_candidates(&store_ng.borrow(), &empty.id, "");
@@ -2274,24 +2314,7 @@ fn wire_session_callbacks(
                     if dup {
                         continue;
                     }
-                    let auth = if h.identity_file.is_empty() {
-                        AuthMethod::Password
-                    } else {
-                        AuthMethod::Key
-                    };
-                    s.upsert(Session {
-                        name: h.alias,
-                        host: h.hostname,
-                        port: h.port,
-                        user: if h.user.is_empty() {
-                            "root".into()
-                        } else {
-                            h.user
-                        },
-                        auth,
-                        private_key_path: h.identity_file,
-                        ..Session::new_empty()
-                    });
+                    s.upsert(h.into_session());
                     added += 1;
                 }
                 if added > 0 {
@@ -2421,6 +2444,12 @@ fn wire_session_callbacks(
             if let Some(w) = weak.upgrade() {
                 w.set_session_groups(session_groups_model(&store));
                 w.set_dialog_forwards(forward_model(&session.forwards));
+                let empty_ssh_config = ssh_config_models(&[]);
+                w.set_dialog_ssh_config_aliases(empty_ssh_config.0);
+                w.set_dialog_ssh_config_hostnames(empty_ssh_config.1);
+                w.set_dialog_ssh_config_ports(empty_ssh_config.2);
+                w.set_dialog_ssh_config_users(empty_ssh_config.3);
+                w.set_dialog_ssh_config_key_paths(empty_ssh_config.4);
                 w.set_dialog_id(session.id.clone().into());
                 w.set_dialog_name(session.name.clone().into());
                 w.set_dialog_host(session.host.clone().into());

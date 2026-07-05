@@ -288,6 +288,99 @@ component JumpCombo inherits VerticalLayout {
     }
 }
 
+// Read-only dropdown for OpenSSH hosts parsed from ~/.ssh/config.
+component SshConfigCombo inherits VerticalLayout {
+    in property <string> label;
+    in property <[string]> choices;
+    in-out property <int> selected-index: -1;
+    callback picked(int /* index */);
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.fs-sm;
+    }
+
+    Rectangle {
+        height: 32px;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: cfg-ta.has-hover ? Theme.accent : Theme.border-subtle;
+        background: Theme.bg-root;
+
+        cfg-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { cfg-popup.show(); }
+        }
+
+        Text {
+            x: 10px;
+            width: parent.width - 44px;
+            height: parent.height;
+            text: (root.selected-index >= 0 && root.selected-index < root.choices.length)
+                ? root.choices[root.selected-index] : @tr("Choose a Host from ~/.ssh/config");
+            color: root.selected-index >= 0 ? Theme.text-primary : Theme.text-muted;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Rectangle {
+            x: parent.width - 36px;
+            width: 28px;
+            height: 28px;
+            border-radius: Theme.radius-sm;
+            background: cfg-ta.has-hover ? Theme.bg-hover : transparent;
+            Text {
+                text: "v";
+                color: Theme.text-secondary;
+                font-size: Theme.fs-xs;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        cfg-popup := PopupWindow {
+            x: 0;
+            y: parent.height + 3px;
+            width: parent.width;
+            Rectangle {
+                background: Theme.bg-elevated;
+                border-radius: Theme.radius-sm;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 1px;
+                    for c[idx] in root.choices : Rectangle {
+                        height: 28px;
+                        border-radius: Theme.radius-sm;
+                        background: c-ta.has-hover ? Theme.bg-hover : transparent;
+                        c-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.selected-index = idx;
+                                root.picked(idx);
+                                cfg-popup.close();
+                            }
+                        }
+                        Text {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            text: c;
+                            color: Theme.text-primary;
+                            font-size: Theme.fs-md;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Modal dialog for creating / editing a session (SSH / Serial / Telnet).
 // The dialog is purely presentational — it stores values in mutable
 // properties and emits `submit` / `cancel` callbacks up to the main window.
@@ -324,6 +417,12 @@ export component SessionDialog inherits Rectangle {
     in-out property <string> draft-flow: "none";
     in-out property <bool> draft-disable-shell-integration: false;
     in-out property <string> draft-note;
+    in property <[string]> ssh-config-aliases;
+    in property <[string]> ssh-config-hostnames;
+    in property <[string]> ssh-config-ports;
+    in property <[string]> ssh-config-users;
+    in property <[string]> ssh-config-key-paths;
+    property <int> ssh-config-index: -1;
 
     // Port forwards / tunnels (#56). `forwards` is the current list (fed from
     // Rust); the nf-* properties hold the add-form fields.
@@ -347,7 +446,12 @@ export component SessionDialog inherits Rectangle {
     background: #000000aa;
 
     // Clear the host-required flag each time the dialog opens (#110).
-    changed is-open => { if (self.is-open) { self.host-missing = false; } }
+    changed is-open => {
+        if (self.is-open) {
+            self.host-missing = false;
+            self.ssh-config-index = -1;
+        }
+    }
 
     // Swallow clicks on the backdrop
     TouchArea {
@@ -415,6 +519,32 @@ export component SessionDialog inherits Rectangle {
                         label: "Telnet";
                         active: root.draft-kind == "telnet";
                         clicked => { root.draft-kind = "telnet"; }
+                    }
+                }
+            }
+
+            if !root.is-editing && root.draft-kind == "ssh" && root.ssh-config-aliases.length > 0 : SshConfigCombo {
+                label: @tr("Import from SSH config");
+                choices: root.ssh-config-aliases;
+                selected-index <=> root.ssh-config-index;
+                picked(idx) => {
+                    if (idx >= 0
+                        && idx < root.ssh-config-aliases.length
+                        && idx < root.ssh-config-hostnames.length
+                        && idx < root.ssh-config-ports.length
+                        && idx < root.ssh-config-users.length
+                        && idx < root.ssh-config-key-paths.length) {
+                        root.draft-kind = "ssh";
+                        root.draft-name = root.ssh-config-aliases[idx];
+                        root.draft-host = root.ssh-config-hostnames[idx];
+                        root.draft-port = root.ssh-config-ports[idx];
+                        root.draft-user = root.ssh-config-users[idx];
+                        root.draft-key-path = root.ssh-config-key-paths[idx];
+                        root.draft-key-inline = "";
+                        root.draft-key-inline-mode = false;
+                        root.draft-auth = root.ssh-config-key-paths[idx] == "" ? "password" : "key";
+                        root.draft-password = "";
+                        root.host-missing = false;
                     }
                 }
             }

@@ -596,6 +596,11 @@ export component AppWindow inherits Window {
     in-out property <string> dialog-flow: "none";
     in-out property <bool> dialog-disable-shell-integration: false;
     in-out property <string> dialog-note;
+    in property <[string]> dialog-ssh-config-aliases;
+    in property <[string]> dialog-ssh-config-hostnames;
+    in property <[string]> dialog-ssh-config-ports;
+    in property <[string]> dialog-ssh-config-users;
+    in property <[string]> dialog-ssh-config-key-paths;
 
     // Delete-confirmation modal state (#28).
     in-out property <bool> confirm-delete-open: false;
@@ -3131,6 +3136,11 @@ export component AppWindow inherits Window {
         draft-flow <=> root.dialog-flow;
         draft-disable-shell-integration <=> root.dialog-disable-shell-integration;
         draft-note <=> root.dialog-note;
+        ssh-config-aliases: root.dialog-ssh-config-aliases;
+        ssh-config-hostnames: root.dialog-ssh-config-hostnames;
+        ssh-config-ports: root.dialog-ssh-config-ports;
+        ssh-config-users: root.dialog-ssh-config-users;
+        ssh-config-key-paths: root.dialog-ssh-config-key-paths;
         forwards: root.dialog-forwards;
         submit(draft) => { root.session-dialog-submit(draft); }
         cancel => { root.session-dialog-cancel(); }

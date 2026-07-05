@@ -381,6 +381,12 @@ msgstr "点击右上角 “新建会话” 添加你的第一台服务器"
 msgid "Import ~/.ssh/config"
 msgstr "导入 ~/.ssh/config"
 
+msgid "Import from SSH config"
+msgstr "从 SSH 配置导入"
+
+msgid "Choose a Host from ~/.ssh/config"
+msgstr "从 ~/.ssh/config 选择一个 Host"
+
 msgid "Proxy (optional)"
 msgstr "代理（可选）"
 

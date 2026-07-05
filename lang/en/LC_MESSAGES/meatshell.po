@@ -381,6 +381,12 @@ msgstr "Use 'New session' (top-right) to add your first server"
 msgid "Import ~/.ssh/config"
 msgstr "Import ~/.ssh/config"
 
+msgid "Import from SSH config"
+msgstr "Import from SSH config"
+
+msgid "Choose a Host from ~/.ssh/config"
+msgstr "Choose a Host from ~/.ssh/config"
+
 msgid "Proxy (optional)"
 msgstr "Proxy (optional)"
 

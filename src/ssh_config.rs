@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::{AuthMethod, Session};
+
 /// One importable host parsed from `~/.ssh/config`.
 #[derive(Debug, Clone)]
 pub struct ImportedHost {
@@ -15,6 +17,38 @@ pub struct ImportedHost {
     pub user: String,
     pub port: u16,
     pub identity_file: String,
+}
+
+impl ImportedHost {
+    pub fn auth_method(&self) -> AuthMethod {
+        if self.identity_file.is_empty() {
+            AuthMethod::Password
+        } else {
+            AuthMethod::Key
+        }
+    }
+
+    /// Convert an imported OpenSSH host block into a saved meatshell session.
+    ///
+    /// The existing bulk importer historically defaulted missing users to
+    /// `root`; keep that behavior for compatibility while the new-session
+    /// picker can still use the raw parsed fields and leave user blank.
+    pub fn into_session(self) -> Session {
+        let auth = self.auth_method();
+        Session {
+            name: self.alias,
+            host: self.hostname,
+            port: self.port,
+            user: if self.user.is_empty() {
+                "root".into()
+            } else {
+                self.user
+            },
+            auth,
+            private_key_path: self.identity_file,
+            ..Session::new_empty()
+        }
+    }
 }
 
 /// Parse the user's `~/.ssh/config` (returns empty if it doesn't exist).
@@ -203,6 +237,26 @@ Host alias-only
         // alias-only: hostname falls back to the alias
         assert_eq!(hosts[1].alias, "alias-only");
         assert_eq!(hosts[1].hostname, "alias-only");
+    }
+
+    #[test]
+    fn imported_host_converts_to_session() {
+        let cfg = "\
+Host prod
+    HostName prod.example.com
+    Port 2200
+    IdentityFile ~/.ssh/prod
+";
+        let home = Path::new("/home/me");
+        let mut hosts = parse_str(cfg, home);
+        let session = hosts.remove(0).into_session();
+
+        assert_eq!(session.name, "prod");
+        assert_eq!(session.host, "prod.example.com");
+        assert_eq!(session.port, 2200);
+        assert_eq!(session.user, "root");
+        assert_eq!(session.auth, AuthMethod::Key);
+        assert!(session.private_key_path.ends_with("/.ssh/prod"));
     }
 
     #[test]
