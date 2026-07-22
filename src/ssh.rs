@@ -1765,6 +1765,15 @@ async fn run_session(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { data }) => {
+                        // Reply to Primary Device Attribute query (ESC [ c or ESC [ 0 c)
+                        // so shells like fish don't hang for 10 seconds waiting for it.
+                        let bytes = &data[..];
+                        if bytes.windows(3).any(|w| w == b"\x1b[c")
+                            || bytes.windows(4).any(|w| w == b"\x1b[0c")
+                        {
+                            let _ = channel.data(&b"\x1b[?1;2c"[..]).await;
+                        }
+
                         // A `sz` in the terminal starts a ZMODEM send. Receive it
                         // straight to the Downloads dir (FinalShell style, #76).
                         // On any protocol error, cancel so the session recovers.
