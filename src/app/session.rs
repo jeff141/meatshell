@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -1538,7 +1539,7 @@ pub(crate) fn wire_session_callbacks(window: &AppWindow, ctx: Rc<AppContext>) {
                     sel_anchor: None,
                     sel_focus: None,
                     sel_ranges: Vec::new(),
-                    history: Vec::new(),
+                    history: VecDeque::new(),
                     prev: Vec::new(),
                     view_offset: 0,
                     displayed_text: Vec::new(),

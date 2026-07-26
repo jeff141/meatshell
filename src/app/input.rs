@@ -3,6 +3,7 @@
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 
+use std::collections::VecDeque;
 use crate::session::ConnectCtx;
 use crate::ssh::SessionCommand;
 use crate::terminal::TermBuffers;
@@ -1130,7 +1131,7 @@ pub(crate) fn wire_key_input(window: &AppWindow, ctx: Rc<AppContext>) {
                 let (rows, cols) = buf.parser.screen().size();
                 buf.parser = vt100::Parser::new(rows, cols, 5000);
                 buf.find_query.clear();
-                buf.history = Vec::new(); // recycle the session scrollback
+                buf.history = VecDeque::new(); // recycle the session scrollback
                 buf.prev = Vec::new();
                 buf.view_offset = 0;
                 buf.sel_anchor = None;

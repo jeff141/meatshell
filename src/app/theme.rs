@@ -126,7 +126,7 @@ pub(crate) fn apply_custom_output_rules(
 /// immersive Theme overrides (accent / tint / image) and set `dark` from the
 /// image luminance. An empty or undecodable id turns immersive mode off and
 /// restores the user's saved light/dark theme.
-pub(crate) fn apply_wallpaper(window: &AppWindow, store: &ConfigStore, bufs: &TermBuffers, id: &str) {
+pub(crate) fn apply_wallpaper(window: &AppWindow, store: &ConfigStore, bufs: &TermBuffers, id: &str, apply_builtin_theme: bool) {
     match crate::wallpaper::load(id) {
         Some(wp) => {
             let (ar, ag, ab) = wp.palette.accent;
@@ -139,7 +139,7 @@ pub(crate) fn apply_wallpaper(window: &AppWindow, store: &ConfigStore, bufs: &Te
             // theme toggle still governs text contrast — a light/white wallpaper
             // reads best in light mode (crisp dark text) rather than being forced
             // dark and greying the text out (#wallpaper).
-            if crate::wallpaper::is_builtin(id) {
+            if apply_builtin_theme && crate::wallpaper::is_builtin(id) {
                 apply_dark_mode(window, bufs, wp.palette.is_dark);
             }
             window.set_wallpaper_active(true);

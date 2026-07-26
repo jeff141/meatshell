@@ -385,6 +385,34 @@ pub(crate) fn wire_tab_callbacks(window: &AppWindow, ctx: Rc<AppContext>) {
     let render_gates = ctx.render_gates.clone();
     let sftp_handles = ctx.sftp_handles.clone();
     let sftp_last_cwd = ctx.sftp_last_cwd.clone();
+    // Ctrl+Tab / Ctrl+Shift+Tab cycle within the currently focused pane (#294).
+    {
+        let weak = window.as_weak();
+        let layout = layout.clone();
+        let content_size = content_size.clone();
+        let tabs_model = tabs_model.clone();
+        let panes_model = panes_model.clone();
+        let splitters_model = splitters_model.clone();
+        let bufs_cycle = bufs.clone();
+        window.on_cycle_tab(move |reverse: bool| {
+            let next = layout.borrow_mut().cycle_focused_tab(reverse);
+            let Some(id) = next else {
+                return;
+            };
+            if let Some(w) = weak.upgrade() {
+                refresh_panes(
+                    &w,
+                    &layout.borrow(),
+                    content_size.get(),
+                    &tabs_model,
+                    &panes_model,
+                    &splitters_model,
+                );
+                rebuild_tab_display(&w, &bufs_cycle, &id);
+            }
+        });
+    }
+
     // Select a tab inside a pane: make it that pane's active tab and focus the
     // pane. refresh_panes propagates active-tab-id (→ sidebar refresh).
     {

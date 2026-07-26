@@ -2383,6 +2383,19 @@ mod selection_tests {
     }
 
     #[test]
+    fn bash_readline_history_repaints_the_current_line() {
+        let mut buffer = make_buf(4, 40, &[], &[], 0);
+        buffer.ingest(b"\x1b[?2004hP> echo second");
+        // GNU readline replaces "second" with the shorter "first" using six
+        // backspaces, DCH for the leftover cell, then the replacement suffix.
+        buffer.ingest(b"\x08\x08\x08\x08\x08\x08\x1b[1Pfirst");
+        buffer.render();
+
+        assert_eq!(buffer.displayed_text[0], "P> echo first");
+        assert_eq!(buffer.parser.screen().cursor_position(), (0, 13));
+    }
+
+    #[test]
     fn vis_to_abs_maps_live_and_scrolled_consistently() {
         // history H0..H2 (3 lines), live LIVE0/LIVE1 → combined len 5.
         let live = make_buf(5, 20, &["H0", "H1", "H2"], &["LIVE0", "LIVE1"], 0);
@@ -2431,12 +2444,12 @@ mod selection_tests {
     #[test]
     fn extract_joins_soft_wrapped_rows() {
         let mut buf = make_buf(5, 10, &[], &["x"], 0);
-        buf.history = vec![
+        buf.history = VecDeque::from([
             wrapped_hist_line("0123456789"),
             wrapped_hist_line("abcdefghij"),
             hist_line("klmnop"),
             hist_line("next"),
-        ];
+        ]);
         buf.sel_anchor = Some((0, 0));
         buf.sel_focus = Some((3, 9));
         assert_eq!(
