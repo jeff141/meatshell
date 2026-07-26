@@ -328,16 +328,33 @@ where
 /// would otherwise bypass the `SLINT_BACKEND` renderer override that exists as the
 /// macOS femtovg/Skia escape hatch (#108/#129) — so we re-honour it by hand.
 #[cfg(target_os = "macos")]
-pub(crate) fn setup_macos_platform() {
+pub(crate) fn setup_macos_platform(renderer_mode: &str) {
     use i_slint_backend_winit::winit::platform::macos::WindowAttributesExtMacOS;
 
     let mut builder = i_slint_backend_winit::Backend::builder();
-    // Preserve the SLINT_BACKEND escape hatch: e.g. "winit-skia" → renderer "skia".
-    if let Ok(v) = std::env::var("SLINT_BACKEND") {
-        if let Some(r) = v.strip_prefix("winit-").filter(|r| !r.is_empty()) {
-            builder = builder.with_renderer_name(r.to_string());
-        }
+    // An explicit environment value wins, including plain "winit" (Slint's
+    // automatic choice). Otherwise use the renderer selected in Settings.
+    let env_backend = std::env::var("SLINT_BACKEND").ok();
+    let renderer = match env_backend.as_deref() {
+        Some(backend) => backend
+            .strip_prefix("winit-")
+            .filter(|renderer| !renderer.is_empty())
+            .map(str::to_owned),
+        None => Some(renderer_mode.to_owned()),
+    };
+    if let Some(renderer) = renderer.as_ref() {
+        builder = builder.with_renderer_name(renderer.clone());
     }
+    tracing::info!(
+        renderer_mode,
+        renderer = renderer.as_deref().unwrap_or("auto"),
+        source = if env_backend.is_some() {
+            "SLINT_BACKEND"
+        } else {
+            "settings"
+        },
+        "initializing macOS renderer"
+    );
     builder = builder.with_window_attributes_hook(|attrs| {
         attrs
             .with_titlebar_transparent(true)

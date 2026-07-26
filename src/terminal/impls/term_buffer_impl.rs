@@ -371,11 +371,10 @@ impl TermBuffer {
         if !self.prev.is_empty() {
             let k = detect_scroll(&self.prev, &curr);
             for line in self.prev.iter().take(k) {
-                self.history.push(line.clone());
+                self.history.push_back(line.clone());
             }
-            if self.history.len() > MAX_HISTORY {
-                let drop = self.history.len() - MAX_HISTORY;
-                self.history.drain(0..drop);
+            while self.history.len() > MAX_HISTORY {
+                self.history.pop_front();
             }
         }
         self.prev = curr;

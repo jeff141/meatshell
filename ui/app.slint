@@ -723,6 +723,7 @@ export component AppWindow inherits Window {
     callback pane-new-tab(int /* pane-id */);
     callback pane-tab-reorder(int /* pane-id */, int /* from */, int /* dir */);
     callback pane-focus(int /* pane-id */);
+    callback cycle-tab(bool /* reverse */);
     // Split pane `pane-id`, peeling `tab-id` into a new pane on `dir`
     // ("left"/"right"/"up"/"down").
     callback pane-split(int /* pane-id */, string /* tab-id */, string /* dir */);
@@ -1460,6 +1461,7 @@ export component AppWindow inherits Window {
                     }
                     delete-group(name) => { root.delete-group(name); }
                     remove-session(id) => { root.remove-session(id); }
+                    cycle-tab(reverse) => { root.cycle-tab(reverse); }
                 }
 
                 // Terminal tabs — one TerminalView per terminal state. Only
@@ -1555,6 +1557,7 @@ export component AppWindow inherits Window {
                     rename-quick-group(g) => { root.qcg-orig = g; root.qcg-name = g; root.qcg-open = true; }
                     delete-quick-group(g) => { root.delete-quick-group(g); }
                     send-key(key, ctrl, alt, shift) => { root.send-key(term.id, key, ctrl, alt, shift) }
+                    cycle-tab(reverse) => { root.cycle-tab(reverse); }
                     terminal-resize(w, h) => { root.terminal-resize(term.id, w, h) }
                     sftp-navigate(path) => { root.sftp-navigate(term.id, path); }
                     sftp-download(path) => { root.sftp-download(term.id, path); }
@@ -3299,6 +3302,12 @@ export component AppWindow inherits Window {
                     VerticalLayout {
                         spacing: 5px;
 
+                Text { text: root.lang-en ? "Tabs" : "标签页";
+                       color: Theme.text-muted; font-size: Theme.fs-xs; }
+                ShortcutRow { keys: root.is-mac ? "⌃Tab" : "Ctrl+Tab"; desc: root.lang-en ? "Next tab" : "下一个标签页"; }
+                ShortcutRow { keys: root.is-mac ? "⌃⇧Tab" : "Ctrl+Shift+Tab"; desc: root.lang-en ? "Previous tab" : "上一个标签页"; }
+
+                Rectangle { height: 6px; }
                 Text { text: root.lang-en ? "Terminal" : "终端";
                        color: Theme.text-muted; font-size: Theme.fs-xs; }
                 ShortcutRow { keys: root.is-mac ? "⌘C" : "Ctrl+Shift+C"; desc: root.lang-en ? "Copy selection" : "复制选中内容"; }

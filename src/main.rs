@@ -33,12 +33,12 @@ fn main() -> anyhow::Result<()> {
     // "PingFang SC" UI font and all text vanished there instead (#129). Icons
     // survived in both cases because Material Icons is an embedded font.
     //
-    // Neither renderer works for every macOS machine, so we no longer pick for the
-    // user: femtovg is the known-good default for the majority. Users for whom
-    // femtovg fails to render text (e.g. #108) can opt into Skia at launch with
-    //     SLINT_BACKEND=winit-skia
-    // The renderer-skia feature is still compiled in on macOS (see Cargo.toml) so
-    // that override is available without a rebuild.
+    // Neither renderer works for every macOS machine, so FemtoVG remains the
+    // known-good default for the majority. Users for whom it fails to render text
+    // (e.g. #108) can select Skia under Settings -> Interface -> Rendering. The
+    // SLINT_BACKEND=winit-skia diagnostic override remains available and takes
+    // precedence over the saved setting. The renderer-skia feature is compiled in
+    // on macOS (see Cargo.toml), so switching does not require a rebuild.
 
     init_tracing();
 

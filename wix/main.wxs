@@ -6,8 +6,9 @@
     $(var.Version)            crate version from Cargo.toml
     $(var.CargoTargetBinDir)  e.g. target\x86_64-pc-windows-msvc\release
 
-  The `WixUI_InstallDir` UI (bottom) gives the user a "Browse..." page so the
-  install directory can be changed, which is the whole point of shipping an MSI.
+  The `WixUI_InstallDir` UI (bottom) gives the user a "Browse..." page. AppSearch
+  restores the previous location before that page is shown, including v0.6.5
+  installations whose ARP InstallLocation value was left blank.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Product
@@ -40,11 +41,35 @@
         <Icon Id="ProductICO" SourceFile="assets\meatshell.ico"/>
         <Property Id="ARPPRODUCTICON" Value="ProductICO"/>
 
+        <!--
+          Preserve a custom install location across major upgrades (#293).
+          New packages write Software\meatshell\InstallDir below. The component
+          search is the migration fallback for v0.6.5-v0.6.7, which did not
+          persist either that value or ARPINSTALLLOCATION. MainExecutable's
+          generated component GUID in those packages was stable and is now
+          pinned explicitly below.
+        -->
+        <Property Id="APPLICATIONFOLDER" Secure="yes">
+            <RegistrySearch Id="PreviousInstallDirRegistry"
+                Root="HKLM"
+                Key="Software\meatshell"
+                Name="InstallDir"
+                Type="directory"
+                Win64="yes"/>
+            <ComponentSearch Id="PreviousMainExecutable"
+                Guid="{ECB1F8D7-7CC7-5A8A-A7CC-56A267A502DC}"
+                Type="file">
+                <DirectorySearch Id="PreviousMainExecutableDirectory"
+                    AssignToProperty="yes"/>
+            </ComponentSearch>
+        </Property>
+
         <Directory Id="TARGETDIR" Name="SourceDir">
             <Directory Id="ProgramFiles64Folder">
                 <!-- Default path; the InstallDir UI lets the user change it. -->
                 <Directory Id="APPLICATIONFOLDER" Name="meatshell">
-                    <Component Id="MainExecutable" Guid="*">
+                    <Component Id="MainExecutable"
+                               Guid="{ECB1F8D7-7CC7-5A8A-A7CC-56A267A502DC}">
                         <File Id="meatshellEXE"
                               Name="meatshell.exe"
                               Source="$(var.CargoTargetBinDir)\meatshell.exe"
@@ -55,6 +80,16 @@
                               Name="THIRD_PARTY_NOTICES.md"
                               Source="THIRD_PARTY_NOTICES.md"
                               KeyPath="yes"/>
+                    </Component>
+                    <Component Id="InstallLocationRegistry"
+                               Guid="{E6877B59-AD5C-4CA3-A1F5-8F8E0CC6CC53}"
+                               Win64="yes">
+                        <RegistryValue Root="HKLM"
+                            Key="Software\meatshell"
+                            Name="InstallDir"
+                            Type="string"
+                            Value="[APPLICATIONFOLDER]"
+                            KeyPath="yes"/>
                     </Component>
                 </Directory>
             </Directory>
@@ -75,13 +110,41 @@
                         KeyPath="yes"/>
                 </Component>
             </Directory>
+            <Directory Id="DesktopFolder" Name="Desktop">
+                <Component Id="DesktopShortcut"
+                           Guid="{A034B952-E060-47C3-8D04-FCA147FBE3E5}">
+                    <Shortcut Id="DesktopShortcutLink"
+                        Name="meatshell"
+                        Description="Lightweight SSH/terminal client"
+                        Target="[APPLICATIONFOLDER]meatshell.exe"
+                        WorkingDirectory="APPLICATIONFOLDER"
+                        Icon="ProductICO"/>
+                    <RegistryValue Root="HKCU"
+                        Key="Software\meatshell"
+                        Name="desktopShortcut"
+                        Type="integer"
+                        Value="1"
+                        KeyPath="yes"/>
+                </Component>
+            </Directory>
         </Directory>
 
         <Feature Id="MainProgram" Title="meatshell" Level="1">
             <ComponentRef Id="MainExecutable"/>
             <ComponentRef Id="ThirdPartyNotices"/>
+            <ComponentRef Id="InstallLocationRegistry"/>
             <ComponentRef Id="ApplicationShortcut"/>
+            <ComponentRef Id="DesktopShortcut"/>
         </Feature>
+
+        <!-- Populate Programs and Features -> InstallLocation as well. -->
+        <CustomAction Id="SetARPInstallLocation"
+            Property="ARPINSTALLLOCATION"
+            Value="[APPLICATIONFOLDER]"
+            Execute="immediate"/>
+        <InstallExecuteSequence>
+            <Custom Action="SetARPInstallLocation" After="CostFinalize">NOT REMOVE</Custom>
+        </InstallExecuteSequence>
 
         <!-- "Choose install location" wizard page (needs WixUIExtension). -->
         <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER"/>

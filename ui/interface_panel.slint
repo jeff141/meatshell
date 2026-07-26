@@ -446,7 +446,7 @@ export component InterfacePanel inherits Rectangle {
                     active: root.ifd-page == "font";
                     clicked => { root.ifd-page = "font"; }
                 }
-                if root.is-windows : NavItem {
+                if root.is-windows || Theme.is-mac : NavItem {
                     icon: "\u{E1B1}"; label: root.lang-en ? "Rendering" : "渲染";
                     active: root.ifd-page == "renderer";
                     clicked => { root.ifd-page = "renderer"; }
@@ -1080,7 +1080,7 @@ export component InterfacePanel inherits Rectangle {
                 }
             }
 
-            // --- Windows renderer page (#280) -------------------------
+            // --- Renderer page (#280) ---------------------------------
             if root.ifd-page == "renderer" : VerticalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
@@ -1091,31 +1091,49 @@ export component InterfacePanel inherits Rectangle {
                 SectionHeader { text: root.lang-en ? "RENDERING" : "渲染"; height: 24px; }
                 SettingRow {
                     label: root.lang-en ? "Renderer" : "渲染器";
-                    desc: root.lang-en
-                        ? "Auto tries GPU acceleration and lets Slint fall back to software. Software is best for VMs and compatibility."
-                        : "自动模式会尝试 GPU 加速，并由 Slint 在初始化失败时回退到软件渲染；虚拟机或兼容性优先时请选择软件。";
+                    desc: Theme.is-mac
+                        ? (root.lang-en
+                            ? "FemtoVG is the default. Try Skia when text is missing or rendered incorrectly on macOS."
+                            : "FemtoVG 是默认渲染器；如果 macOS 上文字缺失或显示异常，可以尝试 Skia。")
+                        : (root.lang-en
+                            ? "Auto tries GPU acceleration and lets Slint fall back to software. Software is best for VMs and compatibility."
+                            : "自动模式会尝试 GPU 加速，并由 Slint 在初始化失败时回退到软件渲染；虚拟机或兼容性优先时请选择软件。");
                     show-divider: false;
                     ComboBox {
                         width: 150px;
-                        model: root.lang-en
-                            ? ["Automatic", "GPU", "Software"]
-                            : ["自动", "GPU", "软件"];
-                        current-value: root.renderer-mode == "auto"
-                            ? (root.lang-en ? "Automatic" : "自动")
-                            : root.renderer-mode == "gpu"
-                                ? "GPU"
-                                : (root.lang-en ? "Software" : "软件");
+                        model: Theme.is-mac
+                            ? ["FemtoVG", "Skia"]
+                            : (root.lang-en
+                                ? ["Automatic", "GPU", "Software"]
+                                : ["自动", "GPU", "软件"]);
+                        current-value: Theme.is-mac
+                            ? (root.renderer-mode == "skia" ? "Skia" : "FemtoVG")
+                            : (root.renderer-mode == "auto"
+                                ? (root.lang-en ? "Automatic" : "自动")
+                                : root.renderer-mode == "gpu"
+                                    ? "GPU"
+                                    : (root.lang-en ? "Software" : "软件"));
                         selected(v) => {
-                            if ((v == "Automatic" || v == "自动")
+                            if (Theme.is-mac && v == "FemtoVG"
+                                    && root.renderer-mode != "femtovg") {
+                                root.renderer-mode = "femtovg";
+                                root.set-renderer-mode("femtovg");
+                                root.renderer-restart-required = true;
+                            } else if (Theme.is-mac && v == "Skia"
+                                    && root.renderer-mode != "skia") {
+                                root.renderer-mode = "skia";
+                                root.set-renderer-mode("skia");
+                                root.renderer-restart-required = true;
+                            } else if (!Theme.is-mac && (v == "Automatic" || v == "自动")
                                     && root.renderer-mode != "auto") {
                                 root.renderer-mode = "auto";
                                 root.set-renderer-mode("auto");
                                 root.renderer-restart-required = true;
-                            } else if (v == "GPU" && root.renderer-mode != "gpu") {
+                            } else if (!Theme.is-mac && v == "GPU" && root.renderer-mode != "gpu") {
                                 root.renderer-mode = "gpu";
                                 root.set-renderer-mode("gpu");
                                 root.renderer-restart-required = true;
-                            } else if ((v == "Software" || v == "软件")
+                            } else if (!Theme.is-mac && (v == "Software" || v == "软件")
                                     && root.renderer-mode != "software") {
                                 root.renderer-mode = "software";
                                 root.set-renderer-mode("software");
@@ -1131,8 +1149,12 @@ export component InterfacePanel inherits Rectangle {
                             ? "Restart MeatShell to apply the renderer change."
                             : "重启 MeatShell 后渲染器设置才会生效。")
                         : (root.lang-en
-                            ? "Software remains the compatibility default for existing installations."
-                            : "现有安装继续默认使用兼容性更好的软件渲染。");
+                            ? (Theme.is-mac
+                                ? "FemtoVG remains the default renderer on macOS."
+                                : "Software remains the compatibility default for existing installations.")
+                            : (Theme.is-mac
+                                ? "macOS 默认继续使用 FemtoVG 渲染器。"
+                                : "现有安装继续默认使用兼容性更好的软件渲染。"));
                     color: root.renderer-restart-required ? Theme.accent : Theme.text-muted;
                     font-size: 11px * Theme.panel-font;
                     wrap: word-wrap;

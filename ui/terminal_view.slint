@@ -326,6 +326,7 @@ export component TerminalView inherits Rectangle {
     callback search-history(string /* query */);   // filter the history dropdown (#101)
 
     callback send-key(string, bool, bool, bool);
+    callback cycle-tab(bool /* reverse */);
     callback terminal-resize(float, float);
     callback sftp-navigate(string);
     callback sftp-download(string);
@@ -937,8 +938,14 @@ export component TerminalView inherits Rectangle {
                     // So `control` already gives ⌘ shortcuts on macOS for free, and
                     // the physical Ctrl (meta on macOS) is what must reach the shell
                     // so ^C/^X work in nano/vim (#158).
+                    // ── Cycle tabs: Ctrl+Tab / Ctrl+Shift+Tab (#294) ──
+                    // On macOS Slint reports the physical Ctrl key as `meta`.
+                    if ((Theme.is-mac ? event.modifiers.meta : event.modifiers.control)
+                            && (event.text == Key.Tab || event.text == Key.Backtab)) {
+                        root.cycle-tab(event.modifiers.shift || event.text == Key.Backtab);
+                        accept
                     // ── Find: ⌘F / Ctrl+F (mirrors right-click → Find) ──
-                    if (event.modifiers.control && !event.modifiers.shift
+                    } else if (event.modifiers.control && !event.modifiers.shift
                             && (event.text == "f" || event.text == "F"
                                 || event.text == "\u{0006}")) {
                         root.find-active = true;
@@ -1173,6 +1180,10 @@ export component TerminalView inherits Rectangle {
                             // Ctrl+A/E/K/U line-editing below stays on Ctrl — those
                             // are the standard readline bindings on macOS too.)
                             if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
+                                    && (e.text == Key.Tab || e.text == Key.Backtab)) {
+                                root.cycle-tab(e.modifiers.shift || e.text == Key.Backtab);
+                                accept
+                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
                                     && (e.text == "r" || e.text == "R" || e.text == "\u{0012}")) {
                                 root.history-open = true;
                                 accept

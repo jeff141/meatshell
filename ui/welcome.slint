@@ -238,6 +238,7 @@ export component Welcome inherits Rectangle {
     callback edit-group(string /* current-name */);
     callback delete-group(string /* name */);
     callback remove-session(string);
+    callback cycle-tab(bool /* reverse */);
     // Compact mode (welcome-as-sidebar): drop the big title/tagline header and
     // tighten padding so the session list fits a narrow docked panel (#v0.5).
     in property <bool> compact;
@@ -249,6 +250,23 @@ export component Welcome inherits Rectangle {
     callback dock-drag-end();
 
     background: Theme.bg-root;
+
+    // The regular welcome page is itself a tab. When Ctrl+Tab wraps from the
+    // last terminal to this page, keep the shortcut chain alive so the next
+    // press can continue to the first terminal (#294). The compact welcome
+    // sidebar must never take focus away from an active terminal.
+    if !root.compact : FocusScope {
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if ((Theme.is-mac ? event.modifiers.meta : event.modifiers.control)
+                    && (event.text == Key.Tab || event.text == Key.Backtab)) {
+                root.cycle-tab(event.modifiers.shift || event.text == Key.Backtab);
+                accept
+            } else {
+                reject
+            }
+        }
+    }
 
     VerticalLayout {
         padding: root.compact ? 12px : 24px;

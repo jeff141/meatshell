@@ -117,7 +117,7 @@ pub fn run() -> Result<()> {
 
     // Immersive native title bar on macOS (must precede the first window).
     #[cfg(target_os = "macos")]
-    setup_macos_platform();
+    setup_macos_platform(config.renderer_mode());
 
     // --- Runtime + store -------------------------------------------------
     let runtime = Arc::new(Runtime::new().context("failed to start tokio runtime")?);
@@ -374,7 +374,10 @@ pub fn run() -> Result<()> {
     // missing custom file falls back to the plain theme).
     {
         let id = store.borrow().wallpaper().to_string();
-        apply_wallpaper(&window, &store.borrow(), &bufs, &id);
+        // Restoring a saved wallpaper must not override the user's persisted
+        // light/dark preference. Built-in wallpapers only suggest their paired
+        // theme when the user actively selects them (#theme-persistence).
+        apply_wallpaper(&window, &store.borrow(), &bufs, &id, false);
     }
     // Editable inputs (e.g. the SFTP path bar) need a CJK-capable font: the
     // embedded mono font has no Chinese glyphs and native TextInput doesn't
@@ -887,8 +890,12 @@ pub fn run() -> Result<()> {
         let proc_weak = proc_win.as_weak();
         window.on_set_wallpaper(move |id: SharedString| {
             let id = id.to_string();
+            let mut selected_builtin_theme = None;
             if let Some(w) = weak.upgrade() {
-                apply_wallpaper(&w, &store.borrow(), &bufs_wp, &id);
+                apply_wallpaper(&w, &store.borrow(), &bufs_wp, &id, true);
+                if crate::wallpaper::is_builtin(&id) {
+                    selected_builtin_theme = Some(w.get_dark_mode());
+                }
                 // Keep an already-open process window in sync with the change.
                 if let Some(p) = proc_weak.upgrade() {
                     sync_proc_theme(&w, &p);
@@ -896,6 +903,12 @@ pub fn run() -> Result<()> {
             }
             let mut s = store.borrow_mut();
             s.set_wallpaper(id);
+            // Choosing a built-in wallpaper applies its recommended palette once;
+            // persist that result so it too survives the next launch. A later
+            // manual theme toggle will overwrite this preference as expected.
+            if let Some(dark) = selected_builtin_theme {
+                s.set_theme_pref(if dark { "dark" } else { "light" }.to_string());
+            }
             let _ = s.save();
         });
     }
@@ -912,7 +925,7 @@ pub fn run() -> Result<()> {
             if let Some(path) = picked {
                 let id = path.to_string_lossy().to_string();
                 if let Some(w) = weak.upgrade() {
-                    apply_wallpaper(&w, &store.borrow(), &bufs_wp, &id);
+                    apply_wallpaper(&w, &store.borrow(), &bufs_wp, &id, false);
                     if let Some(p) = proc_weak.upgrade() {
                         sync_proc_theme(&w, &p);
                     }

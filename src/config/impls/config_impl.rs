@@ -633,8 +633,8 @@ pub struct ConfigFile {
     /// Theme preference: "system" (default) | "dark" | "light".
     #[serde(default)]
     pub theme_pref: String,
-    /// Windows renderer preference: software (compatibility default), auto
-    /// (let Slint try GPU and fall back), or gpu (force FemtoVG/OpenGL) (#280).
+    /// Platform renderer preference. Windows uses software/auto/gpu; macOS uses
+    /// femtovg/skia. Missing or foreign-platform values use the platform default.
     #[serde(default)]
     pub renderer_mode: String,
     /// Terminal font family. Empty = the built-in default ("Meatshell Mono").
@@ -1055,8 +1055,18 @@ impl ConfigStore {
         self.cache.theme_pref = pref;
     }
 
-    /// Windows renderer preference. Missing and invalid values deliberately use
-    /// software so upgrades preserve the high-DPI/VM compatibility from #224.
+    /// Renderer preference for the current platform.
+    #[cfg(target_os = "macos")]
+    pub fn renderer_mode(&self) -> &str {
+        match self.cache.renderer_mode.as_str() {
+            "skia" => "skia",
+            _ => "femtovg",
+        }
+    }
+
+    /// Missing and invalid Windows values deliberately use software so upgrades
+    /// preserve the high-DPI/VM compatibility from #224.
+    #[cfg(not(target_os = "macos"))]
     pub fn renderer_mode(&self) -> &str {
         match self.cache.renderer_mode.as_str() {
             "auto" => "auto",
@@ -1065,6 +1075,15 @@ impl ConfigStore {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn set_renderer_mode(&mut self, mode: String) {
+        self.cache.renderer_mode = match mode.as_str() {
+            "skia" => "skia".into(),
+            _ => "femtovg".into(),
+        };
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn set_renderer_mode(&mut self, mode: String) {
         self.cache.renderer_mode = match mode.as_str() {
             "auto" => "auto".into(),
@@ -1900,6 +1919,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn renderer_mode_preserves_compatibility_default_and_validates() {
         let mut store = temp_store();
         assert_eq!(store.renderer_mode(), "software");
@@ -1913,6 +1933,23 @@ mod tests {
 
         store.cache = serde_json::from_str("{}").expect("legacy config must deserialize");
         assert_eq!(store.renderer_mode(), "software");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn renderer_mode_uses_macos_backends_and_validates() {
+        let mut store = temp_store();
+        assert_eq!(store.renderer_mode(), "femtovg");
+
+        store.set_renderer_mode("skia".into());
+        assert_eq!(store.renderer_mode(), "skia");
+        store.set_renderer_mode("femtovg".into());
+        assert_eq!(store.renderer_mode(), "femtovg");
+        store.set_renderer_mode("unexpected".into());
+        assert_eq!(store.renderer_mode(), "femtovg");
+
+        store.cache = serde_json::from_str("{}").expect("legacy config must deserialize");
+        assert_eq!(store.renderer_mode(), "femtovg");
     }
 
     #[test]
