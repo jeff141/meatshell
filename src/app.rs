@@ -2048,13 +2048,22 @@ pub fn run() -> Result<()> {
             if dir.is_empty() {
                 return;
             }
-            #[cfg(windows)]
-            {
-                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+            let result = {
+                #[cfg(windows)]
+                {
+                    std::process::Command::new("explorer").arg(&dir).spawn()
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    std::process::Command::new("open").arg(&dir).spawn()
+                }
+                #[cfg(all(not(windows), not(target_os = "macos")))]
+                {
+                    std::process::Command::new("xdg-open").arg(&dir).spawn()
+                }
+            };
+            if let Err(e) = result {
+                tracing::warn!("failed to open download directory {dir:?}: {e}");
             }
         });
     }
