@@ -40,5 +40,14 @@
 
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2024 meatshell contributors. MIT OR Apache-2.0.</string>
+
+    <!-- Declare supported localizations so macOS native dialogs (NSOpenPanel)
+         display in the system language (e.g. Chinese) instead of English. -->
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh</string>
+        <string>zh_CN</string>
+        <string>zh-Hans</string>
+    </array>
 </dict>
 </plist>
