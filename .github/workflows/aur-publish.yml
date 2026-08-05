@@ -1,57 +1,317 @@
 name: Publish to AUR
 
-# Pushes the meatshell-bin package to the AUR after a GitHub Release is
-# published. Requires three repository secrets (see packaging/aur/README.md):
-#   AUR_USERNAME, AUR_EMAIL, AUR_SSH_PRIVATE_KEY
-# Without them the job is skipped, so this is harmless until you set AUR up.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 0.3.6); blank = latest release"
+        description: "Version without v, e.g. 0.6.10"
+        required: true
+        type: string
+      dry_run:
+        description: "Generate changes but do not push to AUR"
         required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-meatshell-bin
+  cancel-in-progress: false
+
+env:
+  AUR_REPO: ssh://aur@aur.archlinux.org/meatshell-bin.git
+  AUR_DIR: aur
+  AUR_PACKAGE: meatshell-bin
+  UPSTREAM_REPO: yituorou/meatshell
 
 jobs:
-  aur:
+  publish-aur:
+    name: Publish meatshell-bin to AUR
     runs-on: ubuntu-latest
-    env:
-      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-      AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
-      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-    # Release and manual-dispatch events are the only supported triggers.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release != null }}
+
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version + set pkgver
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          set -eu
-          VER="${{ github.event.inputs.version }}"
-          if [ -z "$VER" ] && [ -n "${{ github.event.release.tag_name }}" ]; then
-            VER="${{ github.event.release.tag_name }}"
-          fi
-          if [ -z "$VER" ]; then
-            VER=$(curl -fsSL https://api.github.com/repos/${{ github.repository }}/releases/latest \
-                  | grep -oP '"tag_name":\s*"\K[^"]+')
-          fi
-          VER="${VER#v}"   # strip leading v
-          echo "Publishing meatshell-bin $VER"
-          sed -i "s/^pkgver=.*/pkgver=${VER}/" packaging/aur/PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" packaging/aur/PKGBUILD
-          echo "VER=$VER" >> "$GITHUB_ENV"
+          set -euo pipefail
 
-      - name: Publish meatshell-bin to the AUR
-        # Skips cleanly until all required AUR secrets are configured.
-        if: ${{ env.AUR_USERNAME != '' && env.AUR_EMAIL != '' && env.AUR_SSH_PRIVATE_KEY != '' }}
-        uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
-        with:
-          pkgname: meatshell-bin
-          pkgbuild: packaging/aur/PKGBUILD
-          commit_username: ${{ env.AUR_USERNAME }}
-          commit_email: ${{ env.AUR_EMAIL }}
-          ssh_private_key: ${{ env.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to ${{ env.VER }}"
-          updpkgsums: true
-          ssh_keyscan_types: rsa,ed25519
+          PUBLISH="true"
+          DRY_RUN="false"
+
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+            if [ "${INPUT_DRY_RUN}" = "true" ]; then
+              DRY_RUN="true"
+            fi
+          else
+            REF="${WORKFLOW_HEAD_BRANCH}"
+
+            if [ -z "${REF}" ]; then
+              echo "Cannot resolve workflow_run head_branch."
+              PUBLISH="false"
+              VERSION=""
+            elif [[ "${REF}" != v* ]]; then
+              echo "Skip: triggering workflow was not a version tag: ${REF}"
+              PUBLISH="false"
+              VERSION=""
+            else
+              VERSION="${REF#v}"
+            fi
+          fi
+
+          if [ "${PUBLISH}" = "true" ]; then
+            if [[ "${VERSION}" == *-* ]]; then
+              echo "Skip prerelease version for stable AUR package: ${VERSION}"
+              PUBLISH="false"
+            fi
+
+            if ! [[ "${VERSION}" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+              echo "Skip invalid stable version: ${VERSION}"
+              PUBLISH="false"
+            fi
+          fi
+
+          {
+            echo "publish=${PUBLISH}"
+            echo "version=${VERSION}"
+            echo "tag=v${VERSION}"
+            echo "dry_run=${DRY_RUN}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "publish=${PUBLISH}"
+          echo "version=${VERSION}"
+          echo "dry_run=${DRY_RUN}"
+
+      - name: Stop when not publishable
+        if: steps.version.outputs.publish != 'true'
+        run: |
+          echo "Nothing to publish to AUR."
+
+      - name: Setup SSH for AUR
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AUR_USERNAME:-}" ]; then
+            echo "AUR_USERNAME secret is required."
+            exit 1
+          fi
+
+          if [ -z "${AUR_EMAIL:-}" ]; then
+            echo "AUR_EMAIL secret is required."
+            exit 1
+          fi
+
+          if [ -z "${AUR_SSH_PRIVATE_KEY:-}" ]; then
+            echo "AUR_SSH_PRIVATE_KEY secret is required."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            HostName aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Clone AUR repository
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone "${AUR_REPO}" "${AUR_DIR}"
+
+      - name: Verify release assets and calculate checksums
+        if: steps.version.outputs.publish == 'true'
+        id: checksums
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TMP_DIR}"' EXIT
+
+          X64_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${TAG}/meatshell-v${VERSION}-linux-x86_64.tar.gz"
+          ARM64_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${TAG}/meatshell-v${VERSION}-linux-aarch64.tar.gz"
+
+          echo "Downloading release assets:"
+          echo "${X64_URL}"
+          echo "${ARM64_URL}"
+
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors "${X64_URL}" -o "${TMP_DIR}/meatshell-x86_64.tar.gz"
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors "${ARM64_URL}" -o "${TMP_DIR}/meatshell-aarch64.tar.gz"
+
+          X64_SHA="$(sha256sum "${TMP_DIR}/meatshell-x86_64.tar.gz" | awk '{print $1}')"
+          ARM64_SHA="$(sha256sum "${TMP_DIR}/meatshell-aarch64.tar.gz" | awk '{print $1}')"
+
+          {
+            echo "x64_sha=${X64_SHA}"
+            echo "arm64_sha=${ARM64_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "X64_SHA=${X64_SHA}"
+          echo "ARM64_SHA=${ARM64_SHA}"
+
+      - name: Update PKGBUILD
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        working-directory: ${{ env.AUR_DIR }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          X64_SHA: ${{ steps.checksums.outputs.x64_sha }}
+          ARM64_SHA: ${{ steps.checksums.outputs.arm64_sha }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("PKGBUILD")
+          text = path.read_text(encoding="utf-8")
+
+          version = os.environ["VERSION"]
+          x64_sha = os.environ["X64_SHA"]
+          arm64_sha = os.environ["ARM64_SHA"]
+
+          def replace_line(source: str, name: str, value: str) -> str:
+              pattern = rf"^{re.escape(name)}=.*$"
+              replacement = f"{name}={value}"
+              new_source, count = re.subn(pattern, replacement, source, flags=re.MULTILINE)
+              if count != 1:
+                  raise RuntimeError(f"Expected exactly one assignment for {name}, got {count}")
+              return new_source
+
+          def replace_array(source: str, name: str, value: str) -> str:
+              pattern = rf"^{re.escape(name)}=\([\s\S]*?\)"
+              new_source, count = re.subn(pattern, value, source, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise RuntimeError(f"Expected exactly one array for {name}, got {count}")
+              return new_source
+
+          text = replace_line(text, "pkgver", version)
+          text = replace_line(text, "pkgrel", "1")
+
+          text = replace_array(
+              text,
+              "sha256sums_x86_64",
+              f"sha256sums_x86_64=('{x64_sha}')",
+          )
+
+          text = replace_array(
+              text,
+              "sha256sums_aarch64",
+              f"sha256sums_aarch64=('{arm64_sha}')",
+          )
+
+          path.write_text(text, encoding="utf-8", newline="\n")
+          PY
+
+          echo "Updated PKGBUILD:"
+          grep -E '^(pkgver|pkgrel|sha256sums_x86_64|sha256sums_aarch64)=' PKGBUILD
+
+      - name: Validate PKGBUILD and generate .SRCINFO
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "${PWD}/${AUR_DIR}:/pkg" \
+            archlinux:base-devel \
+            bash -lc '
+              set -euo pipefail
+
+              useradd -m builder
+              chown -R builder:builder /pkg
+
+              su builder -c "cd /pkg && bash -n PKGBUILD"
+              su builder -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO"
+            '
+
+          sudo chown -R "${USER}:${USER}" "${AUR_DIR}"
+
+          grep -q "pkgver = ${VERSION}" "${AUR_DIR}/.SRCINFO"
+          grep -q "meatshell-v${VERSION}-linux-x86_64.tar.gz" "${AUR_DIR}/.SRCINFO"
+          grep -q "meatshell-v${VERSION}-linux-aarch64.tar.gz" "${AUR_DIR}/.SRCINFO"
+
+      - name: Show diff
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        working-directory: ${{ env.AUR_DIR }}
+        run: |
+          set -euo pipefail
+
+          git status --short
+          git diff -- PKGBUILD .SRCINFO || true
+
+      - name: Commit and push to AUR
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        working-directory: ${{ env.AUR_DIR }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ steps.version.outputs.dry_run }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "${AUR_USERNAME}"
+          git config user.email "${AUR_EMAIL}"
+
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "No changes to publish."
+            exit 0
+          fi
+
+          git add PKGBUILD .SRCINFO
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run enabled. Changes were generated but will not be committed or pushed."
+            git diff --cached --stat
+            git diff --cached -- PKGBUILD .SRCINFO
+            exit 0
+          fi
+
+          git commit -m "Update to ${VERSION}"
+          git push origin master
