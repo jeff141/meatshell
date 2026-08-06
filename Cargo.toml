@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["meatshell contributors"]
 description = "A lightweight FinalShell-style SSH/terminal client written in Rust + Slint"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your/meatshell"
+repository = "https://github.com/yituorou/meatshell"
 readme = "README.md"
 rust-version = "1.75"
 
