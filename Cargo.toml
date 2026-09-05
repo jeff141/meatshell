@@ -9,6 +9,19 @@ repository = "https://github.com/your/meatshell"
 readme = "README.md"
 rust-version = "1.75"
 
+[package.metadata.deb]
+extended-description = "MeatShell is a cross-platform terminal client written in Rust and Slint."
+depends = "$auto"
+# 包分类和优先级
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/meatshell", "usr/bin/meatshell", "755"],
+    ["assets/meatshell.desktop", "usr/share/applications/", "644"],
+    ["assets/icon@512.png", "usr/share/icons/hicolor/512x512/apps/meatshell.png", "644"],
+    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/meatshell/", "644"],
+]
+
 [dependencies]
 slint = { version = "1.8", features = ["compat-1-2"] }
 

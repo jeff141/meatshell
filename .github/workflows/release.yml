@@ -155,61 +155,18 @@ jobs:
           mv meatshell*.AppImage "meatshell-${VERSION}-linux-x86_64.AppImage"
           echo "APPIMAGE=meatshell-${VERSION}-linux-x86_64.AppImage" >> "$GITHUB_ENV"
 
+      - name: Install cargo-deb
+        if: runner.os == 'Linux'
+        run: cargo install cargo-deb --locked
+
       - name: Build Debian package
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -eu
-          VERSION="${GITHUB_REF_NAME:-dev}"
-          VERSION_NUM="${VERSION#v}"
-          case "${{ matrix.target }}" in
-            x86_64-unknown-linux-gnu) DEB_ARCH=amd64 ;;
-            aarch64-unknown-linux-gnu) DEB_ARCH=arm64 ;;
-            *) echo "Unsupported Debian architecture: ${{ matrix.target }}"; exit 1 ;;
-          esac
-
-          ROOT="deb-root"
-          install -Dm755 "target/${{ matrix.target }}/release/meatshell" "$ROOT/usr/bin/meatshell"
-          install -Dm644 assets/meatshell.desktop "$ROOT/usr/share/applications/meatshell.desktop"
-          install -Dm644 assets/icon@512.png "$ROOT/usr/share/icons/hicolor/512x512/apps/meatshell.png"
-          install -Dm644 THIRD_PARTY_NOTICES.md "$ROOT/usr/share/doc/meatshell/THIRD_PARTY_NOTICES.md"
-          install -d "$ROOT/DEBIAN"
-
-          # dpkg-shlibdeps expects source-package metadata in debian/control,
-          # even when -O prints the generated dependency variable to stdout.
-          # Without this file it exits with code 25 on both Linux runners.
-          install -d debian
-          cat > debian/control <<'EOF'
-          Source: meatshell
-          Section: net
-          Priority: optional
-          Maintainer: MeatShell contributors
-          Standards-Version: 4.6.2
-
-          Package: meatshell
-          Architecture: any
-          Depends: ${shlibs:Depends}
-          Description: Lightweight SSH, SFTP, and terminal client
-          EOF
-          DEPENDS="$(dpkg-shlibdeps -O -e"$ROOT/usr/bin/meatshell" | sed -n 's/^shlibs:Depends=//p')"
-          test -n "$DEPENDS"
-          cat > "$ROOT/DEBIAN/control" <<EOF
-          Package: meatshell
-          Version: ${VERSION_NUM}
-          Section: net
-          Priority: optional
-          Architecture: ${DEB_ARCH}
-          Maintainer: MeatShell contributors
-          Depends: ${DEPENDS}
-          Homepage: https://github.com/yituorou/meatshell
-          Description: Lightweight SSH, SFTP, and terminal client
-           MeatShell is a cross-platform terminal client written in Rust and Slint.
-          EOF
-
-          DEB="meatshell-${VERSION}-linux-${DEB_ARCH}.deb"
-          dpkg-deb --root-owner-group --build "$ROOT" "$DEB"
-          dpkg-deb --info "$DEB"
-          echo "DEB=$DEB" >> "$GITHUB_ENV"
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/meatshell target/release/meatshell
+          cargo deb --no-build
+          echo "DEB=$(find target/debian -name '*.deb' -print -quit)" >> "$GITHUB_ENV"
 
       - name: Package
         shell: bash
