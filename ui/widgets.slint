@@ -144,6 +144,20 @@ export component LabeledInput inherits VerticalLayout {
         border-color: input.has-focus ? Theme.accent : root.idle-border;
         background: root.input-background;
 
+        // Hide on focus: IME preedit is visible before value is committed.
+        if root.value == "" && !input.has-focus : Text {
+            x: 10px;
+            y: 0px;
+            width: parent.width - 20px;
+            height: parent.height;
+            overflow: elide;
+            text: placeholder;
+            color: Theme.text-muted;
+            font-family: Theme.ui-font-family;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+        }
+
         input := TextInput {
             x: 10px;
             y: 0px;
@@ -164,17 +178,6 @@ export component LabeledInput inherits VerticalLayout {
                 if (e.text == Key.Escape) { root.canceled(); accept }
                 else { reject }   // let TextInput handle normal typing
             }
-        }
-
-        // Lightweight placeholder — shown when value is empty.
-        if value == "" : Text {
-            x: 10px;
-            y: 0px;
-            height: parent.height;
-            text: placeholder;
-            color: Theme.text-muted;
-            font-size: Theme.fs-md;
-            vertical-alignment: center;
         }
     }
 }

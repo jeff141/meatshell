@@ -90,6 +90,19 @@ component MiniInput inherits Rectangle {
     border-width: 1px;
     border-color: mi.has-focus ? Theme.accent : Theme.border-subtle;
     background: Theme.bg-root;
+    // Hide on focus: IME preedit is visible before value is committed.
+    if root.value == "" && !mi.has-focus : Text {
+        x: 8px;
+        width: parent.width - 16px;
+        height: parent.height;
+        overflow: elide;
+        text: root.placeholder;
+        color: Theme.text-muted;
+        font-family: Theme.ui-font-family;
+        font-size: Theme.fs-md;
+        vertical-alignment: center;
+    }
+
     mi := TextInput {
         x: 8px;
         width: parent.width - 16px;
@@ -101,14 +114,6 @@ component MiniInput inherits Rectangle {
         single-line: true;
         text <=> root.value;
         edited => { root.edited(root.value); }
-    }
-    if root.value == "" : Text {
-        x: 8px;
-        height: parent.height;
-        text: root.placeholder;
-        color: Theme.text-muted;
-        font-size: Theme.fs-md;
-        vertical-alignment: center;
     }
 }
 
@@ -278,6 +283,19 @@ component GroupCombo inherits VerticalLayout {
     border-color: ginput.has-focus ? Theme.accent : Theme.border-strong;
     background: Theme.bg-elevated;
 
+        // Hide on focus: IME preedit is visible before value is committed.
+        if root.value == "" && !ginput.has-focus : Text {
+            x: 10px;
+            width: parent.width - 44px;
+            height: parent.height;
+            overflow: elide;
+            text: root.placeholder;
+            color: Theme.text-muted;
+            font-family: Theme.ui-font-family;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+        }
+
         ginput := TextInput {
             x: 10px;
             width: parent.width - 44px;     // room for the ▾ button
@@ -290,14 +308,6 @@ component GroupCombo inherits VerticalLayout {
             single-line: true;
         }
 
-        if root.value == "" : Text {
-            x: 10px;
-            height: parent.height;
-            text: root.placeholder;
-            color: Theme.text-muted;
-            font-size: Theme.fs-md;
-            vertical-alignment: center;
-        }
 
         // ▾ — opens the existing-groups list (no-op when there are none).
         drop-ta := TouchArea {
