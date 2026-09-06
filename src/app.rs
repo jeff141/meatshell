@@ -6562,19 +6562,12 @@ fn should_drop_macos_bare_ctrl_marker(key: &str, ctrl: bool, is_macos: bool) -> 
 /// when true the four arrow keys must use SS3 sequences (`\x1bOA`…) instead
 /// of the default CSI sequences (`\x1b[A`…).  Full-screen apps like nano and
 /// vim set this mode on startup.
-/// Build the editor's line-number gutter text: "1\n2\n…\nN", one number per line
-/// of `content`, matching its (newline-separated) line count (#81).
-fn line_numbers_for(content: &str) -> String {
-    use std::fmt::Write;
-    let lines = content.split('\n').count().max(1);
-    let mut s = String::with_capacity(lines * 4);
-    for i in 1..=lines {
-        if i > 1 {
-            s.push('\n');
-        }
-        let _ = write!(s, "{i}");
-    }
-    s
+/// Preserve logical lines (including blank and trailing lines) for the gutter.
+/// Slint measures each line with the same wrapping and font as the editor.
+fn editor_lines_for(content: &str) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        content.split('\n').map(SharedString::from).collect::<Vec<_>>(),
+    ))
 }
 
 /// Write `text` to the system clipboard. Call from a dedicated thread, never the
@@ -6786,3 +6779,7 @@ mod selection_tests;
 #[cfg(test)]
 #[path = "../tests/app/output_highlighting/mod.rs"]
 mod log_highlight_tests;
+
+#[cfg(test)]
+#[path = "../tests/app/text_editor/mod.rs"]
+mod text_editor_tests;

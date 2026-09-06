@@ -708,7 +708,7 @@ pub(super) fn wire_sftp_callbacks(
         let weak = window.as_weak();
         window.on_editor_recount(move |text: SharedString| {
             if let Some(w) = weak.upgrade() {
-                w.set_editor_line_numbers(line_numbers_for(text.as_str()).into());
+                w.set_editor_lines(editor_lines_for(text.as_str()));
             }
         });
     }
@@ -809,7 +809,7 @@ pub(super) fn wire_sftp_callbacks(
                 .replace(query.as_str(), replacement.as_str());
             w.set_editor_content(replaced.clone().into());
             w.set_editor_dirty(true);
-            w.set_editor_line_numbers(line_numbers_for(&replaced).into());
+            w.set_editor_lines(editor_lines_for(&replaced));
             w.set_editor_match_count(0);
         });
     }

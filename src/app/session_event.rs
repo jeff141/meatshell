@@ -289,7 +289,7 @@ pub(super) fn apply_session_event_to_window(
         } => {
             if error.is_empty() {
                 // Open the built-in viewer/editor (#70).
-                win.set_editor_line_numbers(line_numbers_for(&content).into());
+                win.set_editor_lines(editor_lines_for(&content));
                 win.set_editor_path(path.into());
                 win.set_editor_name(name.into());
                 win.set_editor_content(content.into());
