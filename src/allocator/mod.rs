@@ -6,7 +6,6 @@ pub(crate) use mimalloc::MiMalloc as Allocator;
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
-    target_os = "android",
     target_os = "ios",
     target_os = "freebsd",
     target_os = "netbsd",
@@ -19,7 +18,6 @@ pub(crate) use jemallocator::Jemalloc as Allocator;
     target_os = "windows",
     target_os = "linux",
     target_os = "macos",
-    target_os = "android",
     target_os = "ios",
     target_os = "freebsd",
     target_os = "netbsd",
@@ -38,7 +36,6 @@ pub(crate) fn allocator_name() -> &'static str {
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
-        target_os = "android",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "netbsd",
@@ -53,7 +50,6 @@ pub(crate) fn allocator_name() -> &'static str {
         target_os = "windows",
         target_os = "linux",
         target_os = "macos",
-        target_os = "android",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "netbsd",
@@ -77,7 +73,6 @@ mod tests {
         #[cfg(any(
             target_os = "linux",
             target_os = "macos",
-            target_os = "android",
             target_os = "ios",
             target_os = "freebsd",
             target_os = "netbsd",
@@ -90,7 +85,6 @@ mod tests {
             target_os = "windows",
             target_os = "linux",
             target_os = "macos",
-            target_os = "android",
             target_os = "ios",
             target_os = "freebsd",
             target_os = "netbsd",

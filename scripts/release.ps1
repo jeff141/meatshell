@@ -83,8 +83,6 @@ if ($existingTag) {
 $version = $Tag.Substring(1)
 $cargoTomlPath = Join-Path $repoRoot "Cargo.toml"
 $cargoLockPath = Join-Path $repoRoot "Cargo.lock"
-$androidCargoTomlPath = Join-Path $repoRoot "android/Cargo.toml"
-$androidCargoLockPath = Join-Path $repoRoot "android/Cargo.lock"
 
 $cargoToml = Get-Content -LiteralPath $cargoTomlPath -Raw
 $newCargoToml = [regex]::Replace(
@@ -108,30 +106,8 @@ if ($newCargoLock -eq $cargoLock) {
     throw "Could not update meatshell version in Cargo.lock."
 }
 
-$androidCargoToml = Get-Content -LiteralPath $androidCargoTomlPath -Raw
-$newAndroidCargoToml = [regex]::Replace(
-    $androidCargoToml,
-    '(?ms)^(\[package\]\s+.*?^version\s*=\s*")[^"]+(")',
-    "`${1}$version`${2}",
-    1
-)
-if ($newAndroidCargoToml -eq $androidCargoToml) {
-    throw "Could not update [package].version in android/Cargo.toml."
-}
-
-$androidCargoLock = Get-Content -LiteralPath $androidCargoLockPath -Raw
-$newAndroidCargoLock = [regex]::Replace(
-    $androidCargoLock,
-    '(?ms)^(name\s*=\s*"meatshell-android"\s*)(\r?\n)(version\s*=\s*")[^"]+(")',
-    "`${1}`${2}`${3}$version`${4}",
-    1
-)
-if ($newAndroidCargoLock -eq $androidCargoLock) {
-    throw "Could not update meatshell-android version in android/Cargo.lock."
-}
-
 if ($DryRun) {
-    Write-Host "Would update desktop and Android Cargo manifests/locks to $version."
+    Write-Host "Would update desktop Cargo manifests/locks to $version."
 } else {
     # Windows PowerShell 5 uses the active ANSI code page for Set-Content by
     # default, which corrupts non-ASCII comments and makes Cargo reject the
@@ -139,8 +115,6 @@ if ($DryRun) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($cargoTomlPath, $newCargoToml, $utf8NoBom)
     [System.IO.File]::WriteAllText($cargoLockPath, $newCargoLock, $utf8NoBom)
-    [System.IO.File]::WriteAllText($androidCargoTomlPath, $newAndroidCargoToml, $utf8NoBom)
-    [System.IO.File]::WriteAllText($androidCargoLockPath, $newAndroidCargoLock, $utf8NoBom)
 }
 
 Run-Cargo -CargoArgs @("check", "--locked")
@@ -151,9 +125,7 @@ Run-CheckedOutput -Expected "meatshell $version" -Command @(
 Run-Git -GitArgs @(
     "add",
     "Cargo.toml",
-    "Cargo.lock",
-    "android/Cargo.toml",
-    "android/Cargo.lock"
+    "Cargo.lock"
 )
 Run-Git -GitArgs @("commit", "-m", "Release $Tag")
 Run-Git -GitArgs @("tag", "-a", $Tag, "-m", "Release $Tag")

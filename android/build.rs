@@ -1,3 +1,0 @@
-fn main() {
-    slint_build::compile("ui/app.slint").expect("failed to compile Android UI");
-}

@@ -7,6 +7,9 @@ All notable changes are documented here. 本文件记录所有重要变更。
 
 ## [0.7.3] - 2026-09-07
 
+- **停止 Android Beta 支持。** 移除 Android 客户端源码、APK 构建和发布任务，发布流程仅保留桌面平台。
+- **Discontinue Android Beta support.** Remove the Android client source, APK builds, and release tasks; releases now target desktop platforms only.
+
 - **修复内置文本查看器和编辑器的行号错位。** 行号按正文自动折行后的显示高度排列，保留空行与末尾换行，并随编辑、替换和窗口宽度变化同步更新；查找与替换输入框的文字和光标统一垂直居中。
 - **Fix line-number alignment in the built-in text viewer and editor.** Align the gutter with wrapped text, preserve blank and trailing lines, and update it after edits, replacements, and width changes. Vertically center text and cursors in the find and replace fields.
 

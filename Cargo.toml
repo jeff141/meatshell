@@ -113,7 +113,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 
 # Use jemalloc on Unix-like desktop/mobile targets. Unsupported targets keep
 # Rust's portable System allocator without pulling in platform dependencies.
-[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
 jemallocator = "0.5"
 
 # Compile the Skia renderer in *only* on macOS (feature is additive over the base
