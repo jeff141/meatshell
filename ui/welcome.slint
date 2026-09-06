@@ -6,6 +6,7 @@ export struct SessionInfo {
     id: string,
     name: string,
     host: string,
+    serial-detail: string, // device, baud rate and framing; empty for non-serial sessions
     port: int,
     user: string,
     auth: string,      // "password" | "key"
@@ -290,7 +291,8 @@ component SessionRow inherits Rectangle {
                 overflow: elide;
             }
             Text {
-                text: session.builtin ? session.host
+                text: session.serial-detail != "" ? session.serial-detail
+                    : session.builtin ? session.host
                     : (session.user != "" ? session.user + "@" : "")
                         + (session.port > 0 ? session.host + ":" + session.port : session.host);
                 color: Theme.text-muted;
@@ -307,7 +309,8 @@ component SessionRow inherits Rectangle {
             overflow: elide;
         }
         if !root.compact : Text {
-            text: session.port > 0 ? session.host + ":" + session.port : session.host;
+            text: session.serial-detail != "" ? session.serial-detail
+                : session.port > 0 ? session.host + ":" + session.port : session.host;
             color: Theme.text-secondary;
             font-size: Theme.fs-sm;
             vertical-alignment: center;
@@ -315,7 +318,7 @@ component SessionRow inherits Rectangle {
             overflow: elide;
         }
         if !root.compact : Text {
-            text: session.user;
+            text: session.serial-detail != "" ? "" : session.user;
             color: Theme.text-secondary;
             font-size: Theme.fs-sm;
             vertical-alignment: center;

@@ -2066,14 +2066,27 @@ async fn run_session(
                         let _ = events.send(SessionEvent::Output(text));
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        tracing::warn!(host = %session.host, exit_status, "SSH shell exited");
                         let _ = events.send(SessionEvent::Status(
                             format!("{} (code {exit_status})", t("远程进程退出", "remote process exited")),
                         ));
                     }
+                    Some(ChannelMsg::ExitSignal { signal_name, core_dumped, error_message, .. }) => {
+                        tracing::warn!(host = %session.host, signal = ?signal_name,
+                            core_dumped, message = ?error_message, "SSH shell terminated by signal");
+                    }
                     Some(ChannelMsg::Close) => {
+                        tracing::warn!(host = %session.host,
+                            compatibility_mode = session.disable_shell_integration,
+                            elapsed_ms = session_started.elapsed().as_millis(),
+                            "SSH shell channel closed by peer");
                         break;
                     }
                     None => {
+                        tracing::warn!(host = %session.host,
+                            compatibility_mode = session.disable_shell_integration,
+                            elapsed_ms = session_started.elapsed().as_millis(),
+                            "SSH shell channel receiver ended; check transport disconnect log");
                         break;
                     }
                     _ => {}
@@ -2876,6 +2889,36 @@ pub(crate) async fn resolve_credentials(
 #[async_trait]
 impl Handler for ClientHandler {
     type Error = russh::Error;
+
+    // The channel receiver closes for both transport failures and peer shutdown.
+    // Preserve the transport reason at WARN level before the shell pump loses it.
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                tracing::warn!(
+                    host = %self.host,
+                    port = self.port,
+                    reason = ?info.reason_code,
+                    message = ?info.message,
+                    "SSH server sent disconnect"
+                );
+                Ok(())
+            }
+            client::DisconnectReason::Error(error) => {
+                tracing::warn!(
+                    host = %self.host,
+                    port = self.port,
+                    error = ?error,
+                    "SSH transport ended with error"
+                );
+                // Match russh's default handler: callers must still receive it.
+                Err(error)
+            }
+        }
+    }
 
     async fn check_server_key(
         &mut self,
