@@ -1,3 +1,4 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SftpPanel, SftpEntry, SftpTreeNode, TunnelInfo } from "sftp_panel.slint";
 import { TabInfo } from "tabs.slint";
@@ -1351,124 +1352,150 @@ export component TerminalView inherits Rectangle {
                     border-width: 1px;
                     border-color: cmd-input.has-focus ? Theme.accent : Theme.border-subtle;
                     background: Theme.bg-root;
-                    cmd-input := TextInput {
-                        x: 8px;
-                        width: parent.width - 16px;
-                        height: parent.height;
-                        color: Theme.text-primary;
-                        font-family: Theme.ui-font-family;
-                        font-size: Theme.fs-md;
-                        vertical-alignment: center;
-                        // Preserve pasted newlines. A single-line input rewrites
-                        // them as spaces and corrupts heredoc terminators before
-                        // run-command receives the text (#319).
-                        single-line: false;
-                        // Enter sends; ↑/↓ recall history.
-                        accepted => {
-                            root.run-command(self.text, root.send-to-all);
-                            self.text = "";
-                            root.history-open = false;
-                            root.history-cursor = -1;
-                            root.focus-pending = true;
+                    clip: true;
+                    TouchArea {
+                        scroll-event(event) => {
+                            command-scroll.viewport-y = clamp(
+                                command-scroll.viewport-y + event.delta-y,
+                                min(0px, command-scroll.visible-height - command-scroll.viewport-height), 0px);
+                            accept
                         }
-                        edited => {
-                            root.history-cursor = -1;
-                            root.quick-open = false;
-                            root.history-autocomplete = self.text != "";
-                            root.search-history(self.text);
-                            root.history-open = root.history-autocomplete;
-                            // Oldest→newest list: default-select the newest match.
-                            root.history-selected = root.history-view.length > 0
-                                ? root.history-view.length - 1 : 0;
-                        }
-                        key-pressed(e) => {
-                            if (e.text == Key.Return && !e.modifiers.shift) {
+                    }
+                    command-scroll := ScrollView {
+                        viewport-width: self.visible-width;
+                        viewport-height: max(self.visible-height, cmd-input.preferred-height);
+                        cmd-input := TextInput {
+                            x: 8px;
+                            width: max(1px, command-scroll.visible-width - 16px);
+                            y: 0px;
+                            height: max(command-scroll.visible-height, self.preferred-height);
+                            color: Theme.text-primary;
+                            font-family: Theme.ui-font-family;
+                            font-size: Theme.fs-md;
+                            vertical-alignment: top;
+                            wrap: char-wrap;
+                            page-height: command-scroll.visible-height;
+                            cursor-position-changed(position) => {
+                                let cursor-y = position.y + command-scroll.viewport-y;
+                                if (cursor-y < 0px) {
+                                    command-scroll.viewport-y = min(0px, command-scroll.viewport-y - cursor-y);
+                                } else if (cursor-y > command-scroll.visible-height - self.font-size) {
+                                    command-scroll.viewport-y = max(
+                                        min(0px, command-scroll.visible-height - command-scroll.viewport-height),
+                                        command-scroll.viewport-y - (cursor-y - command-scroll.visible-height + self.font-size));
+                                }
+                            }
+                            // Preserve pasted newlines. A single-line input rewrites
+                            // them as spaces and corrupts heredoc terminators before
+                            // run-command receives the text (#319).
+                            single-line: false;
+                            // Enter sends; ↑/↓ recall history.
+                            accepted => {
                                 root.run-command(self.text, root.send-to-all);
                                 self.text = "";
                                 root.history-open = false;
                                 root.history-cursor = -1;
                                 root.focus-pending = true;
-                                accept
-                            // ⌘R / Ctrl+R opens the searchable history dropdown and
-                            // focuses its search box — full keyboard history recall
-                            // (#140). Esc closes it / returns to terminal. (The
-                            // Ctrl+A/E/K/U line-editing below stays on Ctrl — those
-                            // are the standard readline bindings on macOS too.)
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
-                                    && (e.text == Key.Tab || e.text == Key.Backtab)) {
-                                root.cycle-tab(e.modifiers.shift || e.text == Key.Backtab);
-                                accept
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
-                                    && (e.text == "r" || e.text == "R" || e.text == "\u{0012}")) {
-                                root.history-autocomplete = false;
-                                root.history-open = true;
-                                accept
-                            } else if (e.text == Key.Escape) {
-                                if (root.history-open) { root.history-open = false; }
-                                else { ime-input.focus(); }   // back to the terminal
-                                accept
-                            } else if (e.text == Key.UpArrow) {
-                                if (root.history-autocomplete && root.history-view.length > 0) {
-                                    root.history-selected = root.history-selected <= 0
-                                        ? root.history-view.length - 1
-                                        : root.history-selected - 1;
-                                } else {
-                                    // Model is oldest→newest (#113): first ↑ jumps
-                                    // to newest, then steps toward older entries.
-                                    if (root.command-history.length > 0) {
-                                        root.history-cursor = root.history-cursor == -1
-                                            ? root.command-history.length - 1
-                                            : max(root.history-cursor - 1, 0);
-                                        self.text = root.command-history[root.history-cursor];
-                                    }
-                                }
-                                accept
-                            } else if (e.text == Key.DownArrow) {
-                                if (root.history-autocomplete && root.history-view.length > 0) {
-                                    root.history-selected = root.history-selected >= root.history-view.length - 1
-                                        ? 0 : root.history-selected + 1;
-                                } else {
-                                    // ↓ steps toward newer; past newest → live input.
-                                    if (root.history-cursor != -1) {
-                                        if (root.history-cursor < root.command-history.length - 1) {
-                                            root.history-cursor += 1;
+                            }
+                            edited => {
+                                root.history-cursor = -1;
+                                root.quick-open = false;
+                                root.history-autocomplete = self.text != "";
+                                root.search-history(self.text);
+                                root.history-open = root.history-autocomplete;
+                                // Oldest→newest list: default-select the newest match.
+                                root.history-selected = root.history-view.length > 0
+                                    ? root.history-view.length - 1 : 0;
+                            }
+                            key-pressed(e) => {
+                                if (e.text == Key.Return && !e.modifiers.shift) {
+                                    root.run-command(self.text, root.send-to-all);
+                                    self.text = "";
+                                    root.history-open = false;
+                                    root.history-cursor = -1;
+                                    root.focus-pending = true;
+                                    accept
+                                // ⌘R / Ctrl+R opens the searchable history dropdown and
+                                // focuses its search box — full keyboard history recall
+                                // (#140). Esc closes it / returns to terminal. (The
+                                // Ctrl+E/K/U line-editing below stays on Ctrl — those
+                                // are the standard readline bindings on macOS too.)
+                                } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
+                                        && (e.text == Key.Tab || e.text == Key.Backtab)) {
+                                    root.cycle-tab(e.modifiers.shift || e.text == Key.Backtab);
+                                    accept
+                                } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control)
+                                        && (e.text == "r" || e.text == "R" || e.text == "\u{0012}")) {
+                                    root.history-autocomplete = false;
+                                    root.history-open = true;
+                                    accept
+                                } else if (e.text == Key.Escape) {
+                                    if (root.history-open) { root.history-open = false; }
+                                    else { ime-input.focus(); }   // back to the terminal
+                                    accept
+                                } else if (e.text == Key.UpArrow) {
+                                    if (root.history-autocomplete && root.history-view.length > 0) {
+                                        root.history-selected = root.history-selected <= 0
+                                            ? root.history-view.length - 1
+                                            : root.history-selected - 1;
+                                    } else {
+                                        // Model is oldest→newest (#113): first ↑ jumps
+                                        // to newest, then steps toward older entries.
+                                        if (root.command-history.length > 0) {
+                                            root.history-cursor = root.history-cursor == -1
+                                                ? root.command-history.length - 1
+                                                : max(root.history-cursor - 1, 0);
                                             self.text = root.command-history[root.history-cursor];
-                                        } else {
-                                            root.history-cursor = -1;
-                                            self.text = "";
                                         }
                                     }
-                                }
-                                accept
-                            } else if (e.text == Key.Tab && root.history-autocomplete) {
-                                if (root.history-view.length > 0
-                                        && root.history-selected < root.history-view.length) {
-                                    self.text = root.history-view[root.history-selected];
+                                    accept
+                                } else if (e.text == Key.DownArrow) {
+                                    if (root.history-autocomplete && root.history-view.length > 0) {
+                                        root.history-selected = root.history-selected >= root.history-view.length - 1
+                                            ? 0 : root.history-selected + 1;
+                                    } else {
+                                        // ↓ steps toward newer; past newest → live input.
+                                        if (root.history-cursor != -1) {
+                                            if (root.history-cursor < root.command-history.length - 1) {
+                                                root.history-cursor += 1;
+                                                self.text = root.command-history[root.history-cursor];
+                                            } else {
+                                                root.history-cursor = -1;
+                                                self.text = "";
+                                            }
+                                        }
+                                    }
+                                    accept
+                                } else if (e.text == Key.Tab && root.history-autocomplete) {
+                                    if (root.history-view.length > 0
+                                            && root.history-selected < root.history-view.length) {
+                                        self.text = root.history-view[root.history-selected];
+                                        self.set-selection-offsets(1000000, 1000000);
+                                    }
+                                    root.history-open = false;
+                                    accept
+                                // --- readline line-editing keys (#103) ---
+                                // Ctrl+A / Cmd+A selects all text in this GUI input.
+                                } else if (e.modifiers.control && (e.text =="a" || e.text == "A" || e.text == "\u{0001}")) {
+                                    self.select-all();
+                                    accept
+                                // Ctrl+E → end of line.
+                                } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="e" || e.text == "E" || e.text == "\u{0005}")) {
                                     self.set-selection-offsets(1000000, 1000000);
+                                    accept
+                                // Ctrl+K → kill from cursor to end (deletes + clipboard).
+                                } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="k" || e.text == "K" || e.text == "\u{000B}")) {
+                                    self.set-selection-offsets(self.cursor-position_byte-offset, 1000000);
+                                    self.cut();
+                                    accept
+                                // Ctrl+U → kill from start to cursor.
+                                } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="u" || e.text == "U" || e.text == "\u{0015}")) {
+                                    self.set-selection-offsets(0, self.cursor-position_byte-offset);
+                                    self.cut();
+                                    accept
+                                } else {
+                                    reject
                                 }
-                                root.history-open = false;
-                                accept
-                            // --- readline line-editing keys (#103) ---
-                            // Ctrl+A → start of line.
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="a" || e.text == "A" || e.text == "\u{0001}")) {
-                                self.set-selection-offsets(0, 0);
-                                accept
-                            // Ctrl+E → end of line.
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="e" || e.text == "E" || e.text == "\u{0005}")) {
-                                self.set-selection-offsets(1000000, 1000000);
-                                accept
-                            // Ctrl+K → kill from cursor to end (deletes + clipboard).
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="k" || e.text == "K" || e.text == "\u{000B}")) {
-                                self.set-selection-offsets(self.cursor-position_byte-offset, 1000000);
-                                self.cut();
-                                accept
-                            // Ctrl+U → kill from start to cursor.
-                            } else if ((Theme.is-mac ? e.modifiers.meta : e.modifiers.control) && (e.text =="u" || e.text == "U" || e.text == "\u{0015}")) {
-                                self.set-selection-offsets(0, self.cursor-position_byte-offset);
-                                self.cut();
-                                accept
-                            } else {
-                                reject
                             }
                         }
                     }
